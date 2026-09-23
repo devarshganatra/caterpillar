@@ -313,6 +313,38 @@ class IncidentTimeline(Base):
     )
 
 
+class IncidentExplanationRow(Base):
+    """
+    One row per successfully-generated (or fallen-back-to) incident
+    explanation. Unique (incident_id, packet_hash) makes reprocessing the
+    same incident state idempotent — the cold worker checks for an
+    existing row before calling the LLM at all (Stage 3 Batch 3H).
+    """
+    __tablename__ = "incident_explanations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=False)
+    packet_hash = Column(String(64), nullable=False)
+    source = Column(String(16), nullable=False)  # GROQ | FALLBACK
+    model_name = Column(String(64), nullable=True)
+    prompt_version = Column(String(32), nullable=False)
+    summary = Column(String(600), nullable=False)
+    probable_causes = Column(JSONB, nullable=False)
+    recommended_actions = Column(JSONB, nullable=False)
+    lesson = Column(JSONB, nullable=False)
+    training_refs = Column(JSONB, nullable=False)
+    confidence = Column(String(8), nullable=False)
+    grounding = Column(JSONB, nullable=False)  # {valid, violations[], attempts}
+    fallback_reason = Column(String(32), nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("incident_id", "packet_hash", name="uq_incident_explanations_incident_packet"),
+        Index("ix_incident_explanations_incident_created", "incident_id", "created_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

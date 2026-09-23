@@ -14,7 +14,7 @@ from sqlalchemy import delete, select
 
 from backend.app.config import settings
 from backend.app.db.session import AsyncSessionLocal
-from backend.app.db.models import Event as DBEvent, IncidentRow, IncidentEvent, IncidentTimeline
+from backend.app.db.models import Event as DBEvent, IncidentRow, IncidentEvent, IncidentTimeline, IncidentExplanationRow
 from backend.app.worker.correlator import Correlator, _reconcile
 from contracts.events import Event as EventModel, AlertSeverity
 
@@ -67,6 +67,12 @@ async def clean_machine():
         async with AsyncSessionLocal() as session:
             incidents = (await session.execute(select(IncidentRow.id).where(IncidentRow.machine_id == MACHINE))).scalars().all()
             for iid in incidents:
+                # incident_explanations (Batch 3H) FK-references incidents.id;
+                # a stray manual cold-worker run against this same dev DB
+                # (e.g. `python -c "... ColdWorker(...).process(...)"`)
+                # leaves a real row here that would otherwise block deleting
+                # the incident below with a ForeignKeyViolationError.
+                await session.execute(delete(IncidentExplanationRow).where(IncidentExplanationRow.incident_id == iid))
                 await session.execute(delete(IncidentTimeline).where(IncidentTimeline.incident_id == iid))
                 await session.execute(delete(IncidentEvent).where(IncidentEvent.incident_id == iid))
             await session.execute(delete(IncidentRow).where(IncidentRow.machine_id == MACHINE))

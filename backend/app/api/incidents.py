@@ -15,7 +15,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.session import get_db
-from backend.app.db.models import IncidentRow, IncidentTimeline, Event as DBEvent, User, UserSiteAccess
+from backend.app.db.models import (
+    IncidentRow, IncidentTimeline, IncidentExplanationRow, Event as DBEvent, User, UserSiteAccess,
+)
 from backend.app.api.deps import get_current_user, require_roles, verify_site_access
 from backend.app.services.audit_chain import append_audit_log
 
@@ -107,21 +109,18 @@ async def get_incident(
     await _authorize_incident_read(row, user, db)
 
     explanation = None
-    try:
-        from backend.app.db.models import IncidentExplanationRow  # Batch 3H adds this table
-        exp_result = await db.execute(
-            select(IncidentExplanationRow).where(IncidentExplanationRow.incident_id == row.id)
-            .order_by(IncidentExplanationRow.created_at.desc()).limit(1)
-        )
-        exp_row = exp_result.scalar_one_or_none()
-        if exp_row is not None:
-            explanation = {
-                "source": exp_row.source, "summary": exp_row.summary,
-                "probable_causes": exp_row.probable_causes, "recommended_actions": exp_row.recommended_actions,
-                "lesson": exp_row.lesson, "confidence": exp_row.confidence,
-            }
-    except ImportError:
-        pass  # Batch 3H not implemented yet
+    exp_result = await db.execute(
+        select(IncidentExplanationRow).where(IncidentExplanationRow.incident_id == row.id)
+        .order_by(IncidentExplanationRow.created_at.desc()).limit(1)
+    )
+    exp_row = exp_result.scalar_one_or_none()
+    if exp_row is not None:
+        explanation = {
+            "source": exp_row.source, "model_name": exp_row.model_name, "summary": exp_row.summary,
+            "probable_causes": exp_row.probable_causes, "recommended_actions": exp_row.recommended_actions,
+            "lesson": exp_row.lesson, "training_refs": exp_row.training_refs, "confidence": exp_row.confidence,
+            "fallback_reason": exp_row.fallback_reason, "created_at": exp_row.created_at,
+        }
 
     summary = _incident_summary(row)
     summary["explanation"] = explanation
@@ -237,6 +236,35 @@ async def close_incident(
 
     await _publish_incident_push(row.machine_id, "closed", incident_id, db)
     return {"status": "CLOSED"}
+
+
+@router.post("/{incident_id}/explain", status_code=status.HTTP_202_ACCEPTED)
+async def request_incident_explanation(
+    incident_id: str, user: User = Depends(require_roles(["SUPERVISOR", "ADMIN"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Manually (re-)queues an incident for the cold worker — e.g. after a
+    fallback explanation, to retry once Groq is back up. Does not block on
+    the actual generation; the cold worker picks it up asynchronously.
+    """
+    row = await _get_incident_or_404(incident_id, db)
+    await _authorize_incident_read(row, user, db)
+
+    await append_audit_log(
+        db, actor_id=str(user.id), action="INCIDENT_EXPLAIN_REQUEST", target_type="incident",
+        target_id=incident_id, payload={},
+    )
+    await db.commit()
+
+    from backend.app.services import stream as stream_module
+    if stream_module.redis_client is not None:
+        try:
+            await stream_module.redis_client.xadd("incidents:work", {"incident_id": incident_id, "reason": "manual"})
+        except Exception:
+            pass  # the audit row and request are still recorded even if the queue is unreachable
+
+    return {"status": "QUEUED"}
 
 
 async def _publish_incident_push(machine_id: str, action: str, incident_id: str, db: AsyncSession) -> None:

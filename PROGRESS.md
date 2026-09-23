@@ -536,3 +536,43 @@ PYTHONPATH=. venv/bin/python -m pytest backend/tests/unit/test_retriever.py back
 - `KnowledgeRetriever` is currently instantiated fresh per-process (module-level lazy singleton in `api/knowledge.py`); the cold worker (3H) will need its own instance — trivial, since construction is cheap (48 chunks, <1ms to load).
 
 **Next:** Batch 3H (Cold worker + grounding + fallback), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3H: Cold worker + grounding validation + deterministic fallback  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** a cold worker that turns every opened/escalated incident into a grounded Groq explanation or a clearly-labelled deterministic fallback, isolated from every other path, with mandatory grounding validation and a retry-once-then-fallback policy.
+
+**New DB schema:** `incident_explanations` (migration `082f4bce7d81_stage3_explanations`, up/down round-trip verified) — `source` (`GROQ|FALLBACK`), `packet_hash` unique per incident (idempotent reprocessing), `grounding` JSONB (`{valid, violations[], attempts}`), `fallback_reason`, `latency_ms`.
+
+**New files:**
+- `backend/app/genai/validator.py` — `validate_grounding()` (every `evidence_refs`/`knowledge_refs`/`training_refs` must exist in the packet's allowed sets; regex-based smuggled-reference detection in free text; forbidden-phrase rejection for "proven"/"definitely caused"/"root cause is"), `parse_and_validate()` (schema errors prefixed `schema:`).
+- `backend/app/genai/fallback.py` — `build_fallback()`: deterministic, static per-event-type cause/action text, top-tag-matched knowledge ref, byte-identical output for the same packet.
+- `backend/app/worker/cold.py` — `ColdWorker.process()`: cache check (packet_hash) → no key → fallback; else attempt → validate → retry once with violations fed back → fallback; persists, updates `incidents.explanation_status`, writes an `EXPLANATION`-kind timeline entry, publishes `ui:{machine}` `incident{action:"explained"}`, updates `worker:status:cold`. Any unexpected exception still tries to mark the incident `FAILED` rather than leaving it silently unexplained.
+- `POST /incidents/{id}/explain` (SUPERVISOR/ADMIN) — re-queues via `incidents:work`, audited `INCIDENT_EXPLAIN_REQUEST`.
+- `GET /incidents/{id}` now returns the real explanation (previously a `try/except ImportError` stub from Batch 3F, now the genuine query).
+- Tests: `backend/tests/unit/test_validator.py` (10), `test_fallback.py` (9), `tests/integration/test_cold_worker.py` (8, includes a grep/AST-based "cold worker imported by nothing safety-critical" check across hot/warm/correlator/entrypoint/copilot_core).
+
+**Three real bugs found — two only surfaced by writing/running the tests, one specifically only by calling the real API:**
+1. **`ProbableCause.evidence_refs` has `min_length=1`, but two fallback code paths could construct one with `evidence_refs=[]`** (the "no distinct event types at all" edge case, and a defensive `if rep_id else []`) — would have crashed `build_fallback` itself in that rare case, exactly when the system most needs a working fallback. Fixed by threading the incident's own `trigger_event_id` (FK-guaranteed to exist) through as the ultimate fallback reference, added to `packet["allowed_event_ids"]` explicitly for this purpose.
+2. **The packet's timeline query selected every `IncidentTimeline` kind, not just `EVENT`** (a Batch 3G bug, invisible until this batch because nothing before it wrote non-`EVENT` timeline rows). Once the cold worker persists an `EXPLANATION`-kind entry, a second packet build for the *same* incident state now included that new row and produced a different `packet_hash` — silently defeating the caching this same worker depends on to avoid double-calling the LLM. Caught by `test_same_packet_processed_twice_is_cached` actually failing (`GROQ` twice instead of `GROQ` then `CACHED`). Fixed by filtering the packet's timeline query to `kind == "EVENT"`, matching the plan's own spec ("timeline: ≤ packet_max_timeline **EVENT** entries") that I'd implemented too loosely the first time.
+3. **A stale test fixture broke under the new FK.** `test_correlator_worker.py`'s `clean_machine` fixture deleted `IncidentRow` for `EXC001` without first deleting from the new `incident_explanations` table — a real row left over from this batch's own manual verification (see below) triggered a live `ForeignKeyViolationError` in the full suite run. Fixed by extending that fixture's cleanup, same pattern it already uses for the other incident-linked tables.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+229 passed in 92.27s
+```
+(161 prior + 68 new: 10 validator, 9 fallback, 8 cold worker integration + the fixture fix above surfaced during this full run — everything green.)
+
+**Manual verification (a): no API key → fallback.** Seeded a fresh incident (`HEALTH_THRESHOLD`, engine_temp_c=110), ran `ColdWorker.process()` with `groq_api_key=""`. `GET /incidents/{id}` via the real running API confirmed: `explanation_status: "FALLBACK"`, `source: "FALLBACK"`, `fallback_reason: "NO_API_KEY"`, `confidence: "LOW"`, evidence_refs/knowledge_refs all real and grounded.
+
+**Manual verification (b): real key → real Groq explanation.** Ran `ColdWorker.process()` against the real incident from Batch 3F/3G's demo run (113 events, CRITICAL, escalated). `GET /incidents/{id}` confirmed: `source: "GROQ"`, `model_name: "openai/gpt-oss-20b"`, `explanation_status: "READY"`. Every `evidence_ref` resolved to a real event id; every `knowledge_ref`/`training_ref` resolved to a real chunk id — the model even correctly folded the incident's RAIN/MUDDY context into its `recommended_actions` (citing `adverse-weather-operation#rain-and-ground-condition`) without being explicitly told to look there. `grep -i "gsk_" /tmp/*.log` → 0 matches across every log file from this session's manual runs — the key never appeared anywhere.
+
+**Known limitations / deferred:**
+- `build_fallback()`'s `lesson` field picks the top-ranked retrieved chunk overall (per the plan's literal spec: "top-1 knowledge chunk"), not tag-filtered like `recommended_actions` is — observed live where a HEALTH_THRESHOLD incident's fallback lesson picked a weather-related chunk because leftover Redis context state (`RAIN`/`MUDDY`) from an much earlier manual session dominated the BM25 query. This is the retrieval mechanism working as designed, not a bug — flagging because it's a plausible future quality improvement (tag-filter the lesson pick too) if fallback lesson relevance turns out to matter more than the plan currently specifies.
+- `build_fallback()` raises `RuntimeError` if the packet's knowledge list is completely empty (impossible with the real 48-chunk knowledge base, but a real failure mode if the knowledge directory were ever misconfigured) — deliberately loud rather than silently constructing a schema-invalid `Lesson`, tested in `test_fallback_raises_clearly_when_knowledge_base_empty`.
+
+**Next:** Batch 3I (Frontend intelligence integration), awaiting approval.

@@ -111,6 +111,20 @@ class TimelineEntry(BaseModel):
     actor_id: Optional[str] = None
 
 
+class IncidentExplanation(BaseModel):
+    """API-facing model for a persisted incident explanation (Batch 3H)."""
+    source: Literal["GROQ", "FALLBACK"]
+    model_name: Optional[str] = None
+    summary: str
+    probable_causes: list[dict]
+    recommended_actions: list[dict]
+    lesson: dict
+    training_refs: list[str] = []
+    confidence: Literal["LOW", "MEDIUM", "HIGH"]
+    fallback_reason: Optional[str] = None
+    created_at: datetime
+
+
 class AnomalyResult(BaseModel):
     window_id: str
     machine_id: str

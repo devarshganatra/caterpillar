@@ -48,10 +48,17 @@ async def build_incident_packet(
 ) -> dict:
     incident = (await session.execute(select(IncidentRow).where(IncidentRow.id == incident_id))).scalar_one()
 
-    # --- timeline (bounded) ---
+    # --- timeline (bounded, EVENT entries only) ---
+    # STATUS/EXPLANATION-kind timeline entries are deliberately excluded:
+    # the cold worker itself writes an EXPLANATION entry after persisting
+    # a result, so including all kinds would make a re-built packet for
+    # the same incident include that new entry and change on every run —
+    # defeating the packet_hash-based caching this same worker relies on
+    # to avoid calling the LLM twice for unchanged incident state.
     timeline_result = await session.execute(
-        select(IncidentTimeline).where(IncidentTimeline.incident_id == incident.id)
-        .order_by(IncidentTimeline.first_ts, IncidentTimeline.id)
+        select(IncidentTimeline).where(
+            IncidentTimeline.incident_id == incident.id, IncidentTimeline.kind == "EVENT",
+        ).order_by(IncidentTimeline.first_ts, IncidentTimeline.id)
     )
     all_entries = timeline_result.scalars().all()
     truncated = len(all_entries) > settings.packet_max_timeline
@@ -165,17 +172,24 @@ async def build_incident_packet(
     scored = retriever.search(query, tags, k=settings.knowledge_top_k)
     knowledge = [
         {"chunk_id": sc.chunk.chunk_id, "title": sc.chunk.title, "heading": sc.chunk.heading,
-         "text": sc.chunk.text[:800]}
+         "text": sc.chunk.text[:800], "tags": sc.chunk.tags}
         for sc in scored
     ]
     allowed_chunk_ids = {k["chunk_id"] for k in knowledge}
+
+    # The trigger event's row is guaranteed to exist (FK constraint on
+    # incidents.trigger_event_id), so it's always safe to cite — included
+    # explicitly in allowed_event_ids as a guaranteed-valid fallback
+    # reference for build_fallback() even in the degenerate case where the
+    # timeline somehow has no EVENT-kind entries with a representative id.
+    allowed_event_ids.add(str(incident.trigger_event_id))
 
     packet = {
         "incident": {
             "id": str(incident.id), "machine_id": incident.machine_id, "site_id": incident.site_id,
             "severity": incident.severity, "escalated": incident.escalated, "status": incident.status,
             "opened_at": incident.opened_at.isoformat(), "last_event_at": incident.last_event_at.isoformat(),
-            "category": incident.category,
+            "category": incident.category, "trigger_event_id": str(incident.trigger_event_id),
         },
         "timeline": timeline,
         "timeline_truncated": truncated,
