@@ -20,6 +20,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!web/src/lib/
 lib64/
 parts/
 sdist/
@@ -71,3 +72,7 @@ Icon
 
 # Docker
 db_data/
+
+# ML — regenerable synthetic dataset (ml/artifacts/ IS committed; models are small and needed at runtime)
+ml/data/
+*.log

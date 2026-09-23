@@ -22,8 +22,27 @@ class UiPushType(str, Enum):
     envelope = "envelope"
     eta = "eta"
     idle_attribution = "idle_attribution"
+    anomaly = "anomaly"
     lesson_ready = "lesson_ready"
     incident = "incident"
+
+class EventType(str, Enum):
+    """
+    Canonical event type strings. Event.type stays a plain str for forward
+    compatibility (new engines can emit new types without a contract change),
+    but this enum is the reference list — use its values when emitting.
+    """
+    SEATBELT_VIOLATION = "SEATBELT_VIOLATION"
+    PROXIMITY_BREACH = "PROXIMITY_BREACH"
+    PROXIMITY_PERSISTENT = "PROXIMITY_PERSISTENT"
+    OVERSPEED_CONDITION = "OVERSPEED_CONDITION"
+    HEALTH_THRESHOLD = "HEALTH_THRESHOLD"
+    IDLE_DEVIATION = "IDLE_DEVIATION"
+    OPERATIONAL_ANOMALY = "OPERATIONAL_ANOMALY"
+    ETA_SLIP = "ETA_SLIP"
+    RISK_LEVEL_CHANGE = "RISK_LEVEL_CHANGE"
+    FATIGUE_INDICATOR = "FATIGUE_INDICATOR"
+    CHECKLIST_FAIL = "CHECKLIST_FAIL"
 
 class SeqValidationResult(str, Enum):
     ACCEPTED = "accepted"

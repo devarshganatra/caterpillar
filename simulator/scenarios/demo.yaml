@@ -3,7 +3,11 @@
     site_id: SITE-A
     weather: RAIN
     rainfall_mm_h: 12
+    visibility_m: 180
+    ambient_temp_c: 18
+    wind_kmh: 10
     ground: MUDDY
+    daylight: true
 
 - at: 30s
   machine_id: EXC001

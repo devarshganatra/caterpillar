@@ -1,8 +1,3 @@
-import pytest
-import asyncio
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# pytest-asyncio 1.x manages the event loop itself via asyncio_mode = auto
+# (set in pytest.ini). A custom `event_loop` fixture is no longer supported
+# and raises a deprecation error on collection, so none is defined here.

@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 from contracts.machine_config import MACHINES, MachineConfig
 from contracts.events import TelemetryFrame, ContextFrame
 from contracts.signing import sign
+from contracts.demo_assignments import get_assignment
 from backend.app.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,8 @@ class MachineRunState:
     operator_id: str
     task_id: str
     mode: SimMode
+    truck_present: bool = False
+    hauler_queue_len: int = 0
     
 def load_scenario(path: str) -> List[Dict[str, Any]]:
     if not path:
@@ -53,7 +56,17 @@ def load_scenario(path: str) -> List[Dict[str, Any]]:
                 ev["at_seconds"] = ev.get("at", 0)
         return events
 
-def create_initial_state(machine_id: str, rng: random.Random) -> MachineRunState:
+def create_initial_state(machine_id: str, rng: random.Random, random_ids: bool = False) -> MachineRunState:
+    if random_ids:
+        operator_id = f"OP_{rng.randint(1000, 9999)}"
+        task_id = f"TSK_{rng.randint(100, 999)}"
+    else:
+        # Deterministic assignment matching seed_db.py's Task/User rows, so
+        # the warm path (ETA, idle attribution) can actually look them up.
+        assignment = get_assignment(machine_id)
+        operator_id = assignment.operator_id
+        task_id = assignment.task_id or f"TSK_{rng.randint(100, 999)}"
+
     return MachineRunState(
         machine_id=machine_id,
         seq=1,
@@ -66,9 +79,11 @@ def create_initial_state(machine_id: str, rng: random.Random) -> MachineRunState
         proximity=None,
         cycle_timer=0,
         cycle_completed=False,
-        operator_id=f"OP_{rng.randint(1000, 9999)}",
-        task_id=f"TSK_{rng.randint(100, 999)}",
-        mode=SimMode.SIM_WORKING # Default starting mode
+        operator_id=operator_id,
+        task_id=task_id,
+        mode=SimMode.SIM_WORKING, # Default starting mode
+        truck_present=True,
+        hauler_queue_len=1,
     )
 
 def advance_state(state: MachineRunState, config: MachineConfig, rng: random.Random):
@@ -118,10 +133,33 @@ def advance_state(state: MachineRunState, config: MachineConfig, rng: random.Ran
         if state.cycle_timer >= cycle_duration:
             state.cycle_completed = True
 
+    # Deterministic hauler-queue model (G9): a truck loading task depends on
+    # a truck being present with room in the queue. Without this, truck_present
+    # was always False and hauler_queue_len always 0, so idle attribution could
+    # never distinguish SITE-caused idle (no truck) from OPERATOR-caused idle.
+    # Simple Markov toggle: while working, trucks cycle in/out on a slow
+    # timescale; while idle/travel, the truck situation just drifts slowly.
+    if rng.random() < 0.02:  # ~ once every 50 simulated seconds on average
+        state.truck_present = not state.truck_present
+    if state.truck_present:
+        state.hauler_queue_len = max(0, min(3, state.hauler_queue_len + rng.choice([-1, 0, 0, 1])))
+        if state.hauler_queue_len == 0:
+            state.hauler_queue_len = 1
+    else:
+        state.hauler_queue_len = 0
+
 def parse_duration(d) -> int:
     if isinstance(d, int): return d
     if isinstance(d, str) and d.endswith("s"): return int(d[:-1])
     return int(d)
+
+def _apply_set(state: MachineRunState, updates: Dict[str, Any]):
+    for k, v in updates.items():
+        if k == "mode":
+            # "idle" | "travel" | "working" -> SimMode.SIM_IDLE | SIM_TRAVEL | SIM_WORKING
+            setattr(state, k, SimMode(v))
+        else:
+            setattr(state, k, v)
 
 def apply_scenario_overrides(state: MachineRunState, events: List[Dict[str, Any]], elapsed: int):
     for ev in events:
@@ -134,12 +172,10 @@ def apply_scenario_overrides(state: MachineRunState, events: List[Dict[str, Any]
             for i in range(times):
                 if elapsed == at + (i * every):
                     if ev.get("machine_id") == state.machine_id and "set" in rep:
-                        for k, v in rep["set"].items():
-                            setattr(state, k, v)
+                        _apply_set(state, rep["set"])
         else:
             if elapsed == at and ev.get("machine_id") == state.machine_id and "set" in ev:
-                for k, v in ev["set"].items():
-                    setattr(state, k, v)
+                _apply_set(state, ev["set"])
 
 def build_telemetry_frame(state: MachineRunState) -> TelemetryFrame:
     return TelemetryFrame(
@@ -156,15 +192,16 @@ def build_telemetry_frame(state: MachineRunState) -> TelemetryFrame:
         seatbelt=state.seatbelt,
         proximity=state.proximity,
         cycle_completed=state.cycle_completed,
-        truck_present=False, # default for now
-        hauler_queue_len=0,
+        truck_present=state.truck_present,
+        hauler_queue_len=state.hauler_queue_len,
         gps=[37.7749, -122.4194],
         sig=""
     )
 
-async def run_machine_loop(machine_id: str, config: MachineConfig, rng: random.Random, 
-                           scenario_events: List[Dict], hmac_secret: str, api_url: str):
-    state = create_initial_state(machine_id, rng)
+async def run_machine_loop(machine_id: str, config: MachineConfig, rng: random.Random,
+                           scenario_events: List[Dict], hmac_secret: str, api_url: str,
+                           random_ids: bool = False):
+    state = create_initial_state(machine_id, rng, random_ids=random_ids)
     elapsed = 0
     
     async with httpx.AsyncClient() as client:
@@ -207,22 +244,27 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", help="Path to scenario YAML")
     parser.add_argument("--machine", help="Run only one machine ID")
-    parser.add_argument("--seed", type=int, help="Deterministic seed for RNG", default=None)
+    parser.add_argument("--seed", type=int, help="Deterministic seed for RNG", default=42)
+    parser.add_argument(
+        "--random-ids", action="store_true",
+        help="Use random operator_id/task_id per machine instead of the deterministic "
+             "seed_db.py assignment (old behaviour; breaks ETA/attribution lookups)."
+    )
     args = parser.parse_args()
 
     scenario_events = load_scenario(args.scenario)
-    
-    rng = random.Random(args.seed if args.seed is not None else random.randint(0, 1000000))
-    
+
+    rng = random.Random(args.seed)
+
     api_url = "http://localhost:8000"
-    
+
     tasks = []
     for m_id, config in MACHINES.items():
         if args.machine and m_id != args.machine:
             continue
-            
+
         secret = settings.parsed_machine_hmac_keys.get(m_id, f"secret_{m_id}")
-        tasks.append(run_machine_loop(m_id, config, rng, scenario_events, secret, api_url))
+        tasks.append(run_machine_loop(m_id, config, rng, scenario_events, secret, api_url, random_ids=args.random_ids))
         
     await asyncio.gather(*tasks)
 
