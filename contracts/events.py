@@ -117,6 +117,15 @@ class Incident(BaseModel):
     ended_at: Optional[datetime] = None
     timeline: list
     explanation: Optional[dict] = None
+    # Stage 3 Batch 3E additions (additive, all optional so any earlier
+    # caller building an Incident without them still works).
+    site_id: Optional[str] = None
+    status: Optional[Literal["OPEN", "ACKNOWLEDGED", "CLOSED"]] = None
+    task_id: Optional[str] = None
+    escalated: bool = False
+    last_event_at: Optional[datetime] = None
+    event_count: int = 0
+    explanation_status: Optional[Literal["PENDING", "READY", "FALLBACK", "FAILED"]] = None
     lesson_id: Optional[str] = None
 
 class AuditEntry(BaseModel):

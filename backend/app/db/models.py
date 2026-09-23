@@ -238,6 +238,81 @@ class EtaEstimateRow(Base):
     )
 
 
+class IncidentRow(Base):
+    """
+    One row per correlated incident. id is deterministic
+    (contracts.ids.incident_id(machine_id, trigger_event_id)), so opening
+    the same incident twice (e.g. reprocessed events after a restart) is a
+    no-op via ON CONFLICT DO NOTHING.
+    """
+    __tablename__ = "incidents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    machine_id = Column(String(32), ForeignKey("machines.id"), nullable=False)
+    site_id = Column(String(32), nullable=False)
+    operator_id = Column(String(64), nullable=True)
+    task_id = Column(String(64), nullable=True)
+    category = Column(String(64), nullable=False)  # event type of the highest-severity entry
+    severity = Column(String(16), nullable=False)
+    escalated = Column(Boolean, nullable=False, default=False)
+    status = Column(String(16), nullable=False, default="OPEN")  # OPEN | ACKNOWLEDGED | CLOSED
+    opened_at = Column(DateTime(timezone=True), nullable=False)
+    last_event_at = Column(DateTime(timezone=True), nullable=False)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    closed_by = Column(UUID(as_uuid=True), nullable=True)
+    close_note = Column(String(500), nullable=True)
+    trigger_event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=False)
+    event_count = Column(Integer, nullable=False, default=0)
+    risk_level_at_open = Column(String(16), nullable=True)
+    explanation_status = Column(String(16), nullable=False, default="PENDING")  # PENDING|READY|FALLBACK|FAILED
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_incidents_machine_status_last_event", "machine_id", "status", "last_event_at"),
+        Index("ix_incidents_site_opened", "site_id", "opened_at"),
+    )
+
+
+class IncidentEvent(Base):
+    """Links an Event to the Incident it was correlated into. event_id is
+    UNIQUE: one event belongs to at most one incident (no double-counting)."""
+    __tablename__ = "incident_events"
+
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id"), primary_key=True, nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), primary_key=True, nullable=False, unique=True)
+    linked_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class IncidentTimeline(Base):
+    """
+    Ordered, bounded-growth timeline for an incident. Repeated events with
+    the same entry_key within a short window merge into one row (count++)
+    instead of one row per event — hot-path events can fire every frame.
+    """
+    __tablename__ = "incident_timeline"
+
+    id = Column(Integer, Identity(start=1, cycle=False), primary_key=True)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=False)
+    kind = Column(String(16), nullable=False)  # EVENT | STATUS | EXPLANATION
+    entry_key = Column(String(128), nullable=False)
+    event_type = Column(String(64), nullable=True)
+    severity = Column(String(16), nullable=True)
+    first_ts = Column(DateTime(timezone=True), nullable=False)
+    last_ts = Column(DateTime(timezone=True), nullable=False)
+    count = Column(Integer, nullable=False, default=1)
+    representative_event_id = Column(UUID(as_uuid=True), nullable=True)
+    summary = Column(String(500), nullable=False)
+    actor_id = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("incident_id", "entry_key", "first_ts", name="uq_incident_timeline_key_first_ts"),
+        Index("ix_incident_timeline_incident_order", "incident_id", "first_ts", "id"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

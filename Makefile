@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train worker-warm
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train worker-warm worker-correlator
 
 up:
 	docker-compose up -d
@@ -54,3 +54,6 @@ train: gen-data train-eta baselines train-anomaly evaluate
 
 worker-warm:
 	PYTHONPATH=. venv/bin/python -m backend.app.worker.warm
+
+worker-correlator:
+	PYTHONPATH=. venv/bin/python -m backend.app.worker.correlator

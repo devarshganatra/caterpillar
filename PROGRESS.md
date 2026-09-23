@@ -387,3 +387,48 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/
 - Full-throughput latency (largest window, 273 frames) was 547ms — fine for a 30s window cadence, but not yet load-tested at the 500-machine scale ARCH's back-of-envelope section discusses.
 
 **Next:** Batch 3E (Event correlation + incident persistence), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3E: Event correlation + incident persistence  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** a separate correlator service consuming `events:{shard}` on its own group, grouping events into Incidents per ARCH §6.9 (5-min per-machine correlation window, open/extend/escalate, ordered+bounded timeline, no duplicates). The warm worker never creates incidents.
+
+**New DB schema** (migration `49f6179bb7ee_stage3_incidents`, up/down round-trip verified): `incidents` (deterministic PK via `contracts.ids.incident_id`), `incident_events` (`event_id` UNIQUE — one event belongs to at most one incident), `incident_timeline` (bounded via `(incident_id, entry_key, first_ts)` unique + merge-on-write, so repeated hot-path events collapse into one row with a growing `count`).
+
+**New files:**
+- `backend/app/services/correlator.py` — pure decision logic: `decide()` (OPEN/EXTEND/IGNORE_INFO + escalation rule), `timeline_entry_key()`/`merge_into_entry()` (bounds timeline growth), `summarize_event()` (deterministic per-type templates).
+- `backend/app/worker/correlator.py` — `Correlator.handle_event()` (per-machine advisory lock → dedup check → decide → open/extend → link event → upsert timeline, one transaction), startup `_reconcile()` (catches the crash window between a producer's commit and its XADD), 4-shard consumer-group loop.
+- `contracts/events.py`: `Incident` gained additive optional fields (`site_id`, `status`, `task_id`, `escalated`, `last_event_at`, `event_count`, `explanation_status`). `contracts/intelligence.py`: `IncidentSummary`, `TimelineEntry`.
+- Tests: `backend/tests/unit/test_correlator.py` (19, pure decision logic), `tests/integration/test_correlator_worker.py` (10, full DB pipeline), `backend/tests/unit/test_entrypoint_shard_scoping.py` (1, regression guard — see below).
+
+**Three real bugs found and fixed, in order of how they surfaced (all during manual end-to-end verification, not caught by any unit/integration test beforehand — worth being honest about that):**
+
+1. **My own bug in `_extend_incident`.** I mutated `incident.severity` to the new max *before* comparing it against the old value to decide whether `category` should update — so the comparison was checking the new value against itself, always true. Fixed by capturing `old_severity` first. Caught by re-reading my own diff, not a test.
+
+2. **`hot.py`'s event insert only covered one named constraint.** `on_conflict_do_nothing(constraint="uq_events_machine_seq_type")` — but Batch 3.0 made event IDs deterministic, so a machine's telemetry seq counter restarting (e.g. re-running the simulator) can regenerate a **primary-key** collision, which that narrowly-scoped clause doesn't catch. Result: an unhandled `IntegrityError` silently killed that shard's hot-worker consumer loop. Found by running two consecutive simulator sessions against the real stack and watching the hot worker log an uncaught exception. Fixed by dropping the conflict target entirely (`on_conflict_do_nothing()`, no args) — matches the pattern already used in `warm.py`/`correlator.py`.
+
+3. **A genuine pre-existing concurrency bug in `entrypoint.py`, exposed (not created) by this batch.** The idle-flush branch iterated `hot_states.values()` — *every* machine, shared across all 4 concurrent shard-consumer tasks — instead of only the machines belonging to that task's own shard. Two shard tasks could call `flush_buffers()` on the *same* `MachineHotState` concurrently, racing on its mutable buffer lists. Effect: some events got XADDed to `events:{shard}` (from one racing copy) but never actually committed to the DB (lost in the other copy) — invisible until the correlator tried to link one and hit a foreign-key violation on an event that plain doesn't exist. This predates Stage 3 entirely; nothing before the correlator was checking referential integrity against the stream, so it was silently losing data with no symptom. Fixed by scoping the idle-flush loop to `shard_for(machine_id) == shard_index`, extracted into a testable `flush_idle_machines_for_shard()` helper with a regression test (`test_entrypoint_shard_scoping.py`) that fails on the pre-fix code (verified by construction: without the filter, the mocked flush would be called for both shards' machines).
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+162 passed in 85.92s
+```
+(132 prior + 30 new: 19 correlator unit, 10 correlator integration, 1 entrypoint regression.)
+
+**Manual verification — full stack (API + hot + warm + correlator + simulator), measured:**
+1. Ran `demo.yaml` against `EXC001` (seatbelt at 30s + 4× ORANGE proximity repeats) for ~15s. Correlator log showed a stream of `extended`/`escalated` actions, all against the same `incident_id`.
+2. Final incident: `severity=CRITICAL`, `escalated=true`, `status=OPEN`, `event_count=138`, `category=SEATBELT_VIOLATION` (the original trigger's type, correctly preserved since the CRITICAL upgrade came from the SAME type).
+3. Timeline: **138 individual events collapsed into exactly 3 timeline rows** — 1 `SEATBELT_VIOLATION` entry (`count=44`), 1 `STATUS` escalation entry, 1 `PROXIMITY_BREACH:ORANGE` entry (`count=94`) — the bounded-timeline merge logic working correctly on real, continuous hot-path event volume.
+4. `incidents:work` stream correctly received `opened` then `escalated` entries (payload: `incident_id`, `reason`) for the Batch 3H cold worker to consume later.
+5. **Referential integrity check** after the two-bug-fix cycle above: `SELECT count(*) FROM incident_events WHERE event_id NOT IN (SELECT id FROM events)` → **0** (was >0 before the fixes, causing live `ForeignKeyViolationError`s).
+6. Ran two back-to-back simulator sessions (same scenario, different seeds — deliberately reproducing overlapping deterministic event IDs, since the scenario's frame-seq timing is independent of RNG seed) specifically to stress the idempotency/conflict-handling path: zero errors in hot worker or correlator logs after the fixes, versus reliable crashes before them.
+
+**Known limitations / deferred:**
+- The plan's "two correlator consumers racing on the same machine → exactly one incident" test is covered structurally by the advisory lock (`pg_advisory_xact_lock(hashtext('corr:'||machine_id))`) and by the deterministic-incident-id + `ON CONFLICT DO NOTHING` combination, but not exercised with two genuinely concurrent asyncio tasks in a test — the lock serializes any such race by construction, and this pattern already has coverage in Batch 3D's warm-worker equivalent.
+- `_lookup_task_id` picks the most recent `window_aggregates` row at or before the event's timestamp; if the warm worker hasn't closed a window yet for a brand-new task, an incident opens with `task_id=None` until one does. Not revisited — acceptable given incidents open on safety events that fire well before a 30s window closes anyway.
+
+**Next:** Batch 3F (Incident APIs + snapshot + backend integration), awaiting approval.

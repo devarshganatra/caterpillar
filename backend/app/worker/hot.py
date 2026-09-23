@@ -137,9 +137,18 @@ async def flush_buffers(
             })
 
         stmt = insert(DBEvent).values(values)
-        stmt = stmt.on_conflict_do_nothing(
-            constraint="uq_events_machine_seq_type"
-        )
+        # No explicit conflict target: event ids are now deterministic
+        # (contracts.ids.hot_event_id), so a re-run that regenerates the
+        # same (machine_id, frame_seq, type, evidence) tuple produces the
+        # same PRIMARY KEY, not just the same uq_events_machine_seq_type
+        # triple. Targeting only the named constraint left the PK conflict
+        # uncaught -> unhandled IntegrityError that killed the hot worker's
+        # consumer loop (observed: a machine's telemetry seq counter
+        # restarting, e.g. the simulator being re-run, regenerates
+        # previously-seen event ids). No target means Postgres suppresses
+        # ANY constraint violation on this insert, which is what idempotent
+        # reprocessing actually requires.
+        stmt = stmt.on_conflict_do_nothing()
         await session.execute(stmt)
         
     # 2. Insert state logs using ON CONFLICT DO NOTHING

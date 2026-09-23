@@ -81,6 +81,36 @@ class AnomalyDriver(BaseModel):
     shap: Optional[float] = None
 
 
+class IncidentSummary(BaseModel):
+    """Compact incident view for UI pushes / list endpoints (Batch 3E/3F)."""
+    id: str
+    machine_id: str
+    site_id: str
+    operator_id: Optional[str] = None
+    task_id: Optional[str] = None
+    category: str
+    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    escalated: bool = False
+    status: Literal["OPEN", "ACKNOWLEDGED", "CLOSED"]
+    opened_at: datetime
+    last_event_at: datetime
+    event_count: int
+    explanation_status: Literal["PENDING", "READY", "FALLBACK", "FAILED"] = "PENDING"
+
+
+class TimelineEntry(BaseModel):
+    entry_key: str
+    kind: Literal["EVENT", "STATUS", "EXPLANATION"]
+    event_type: Optional[str] = None
+    severity: Optional[str] = None
+    first_ts: datetime
+    last_ts: datetime
+    count: int
+    representative_event_id: Optional[str] = None
+    summary: str
+    actor_id: Optional[str] = None
+
+
 class AnomalyResult(BaseModel):
     window_id: str
     machine_id: str

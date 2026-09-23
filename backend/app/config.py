@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     anomaly_min_train_rows: int = 500
     robust_z_threshold: float = 3.5
 
+    # Correlator (Stage 3 Batch 3E, ARCH 6.9)
+    correlation_window_s: int = 300
+    correlator_reconcile_lookback_s: int = 900
+    correlator_extend_push_throttle_s: float = 5.0
+
     @property
     def parsed_machine_hmac_keys(self) -> dict[str, str]:
         if not self.machine_hmac_keys.strip():

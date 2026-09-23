@@ -10,6 +10,7 @@ from backend.app.db.session import AsyncSessionLocal
 from backend.app.worker.hot import MachineHotState, process_frame, flush_buffers
 from contracts.machine_config import MACHINES
 from contracts.events import MachineState
+from contracts.shard import shard_for
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -45,6 +46,28 @@ async def restore_hot_states(redis_client: Redis) -> dict[str, MachineHotState]:
                 logger.warning(f"Failed to restore state for {mid}: {e}")
                 
     return states
+
+async def flush_idle_machines_for_shard(
+    hot_states: dict, shard_index: int, redis_client: Redis, stream_key: str, group_name: str
+) -> None:
+    """
+    Flushes any machine with a lingering buffer — but ONLY machines that
+    belong to THIS shard. hot_states is a dict shared across all 4
+    concurrent shard tasks; iterating every machine here (the original bug)
+    let two shard tasks call flush_buffers() on the SAME MachineHotState
+    concurrently whenever a machine happened to go idle while another
+    shard's task was also idle-flushing, racing on the same mutable
+    event_buffer/state_log_buffer lists — observed as events silently
+    never reaching the DB despite being XADDed to the events stream (each
+    shard task must be the only writer for its own machines).
+    """
+    for machine_id, state in hot_states.items():
+        if shard_for(machine_id) != shard_index:
+            continue
+        if state.event_buffer or state.state_log_buffer or state.unacked_msg_ids:
+            async with AsyncSessionLocal() as session:
+                await flush_buffers(session, state.machine_id, state, redis_client, stream_key, group_name)
+
 
 async def consume_shard(
     shard_index: int, 
@@ -85,11 +108,10 @@ async def consume_shard(
             )
             
             if not msgs:
-                # Idle, force flush any lingering buffers
-                for state in hot_states.values():
-                    if state.event_buffer or state.state_log_buffer or state.unacked_msg_ids:
-                        async with AsyncSessionLocal() as session:
-                            await flush_buffers(session, state.machine_id, state, redis_client, stream_key, group_name)
+                # Idle, force flush any lingering buffers.
+                await flush_idle_machines_for_shard(
+                    hot_states, shard_index, redis_client, stream_key, group_name
+                )
                 continue
                 
             async with AsyncSessionLocal() as session:
