@@ -489,3 +489,50 @@ PYTHONPATH=. venv/bin/python -m pytest tests/integration/test_incident_api.py te
 - No pagination cursor beyond `limit`/`offset` on `GET /incidents` — fine at this scale, would need a real cursor for production incident volume.
 
 **Next:** Batch 3G (Knowledge retrieval + Gemini client), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3G: Knowledge retrieval + LLM client  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** a stable-ID knowledge base with BM25 retrieval, the incident packet builder, a structured-output schema, and an async LLM client with timeout.
+
+**Architecture decision — Gemini → Groq.** The plan originally scoped this batch around Gemini (`google-genai` SDK). Partway through, the user provided a Groq API key and asked to use it instead, picking a model for "text generation only, no very big tough task" with good rate limits. Checked the live Groq API: the model catalog no longer includes Llama 3.x (the user's first guess) — it now serves OpenAI's open-weight `gpt-oss-20b`/`gpt-oss-120b` and Qwen. Chose **`openai/gpt-oss-20b`**: identical rate-limit budget to `gpt-oss-120b` on this key (1000 req / 8000 tokens per reset window), but faster (better fit for the 8s timeout) and cheaper on tokens per call. Model name is entirely config-driven (`settings.groq_model`), never hardcoded elsewhere, so switching later is a one-line change. This is a **provider swap, not a scope change** — every other part of the plan (packet-only input, no tool calling, grounding validation, deterministic fallback in 3H) is unchanged; `generate_explanation(system, user) -> (dict, meta)` is provider-agnostic by design.
+
+**Key handling:** the real key was pasted in chat and written directly to `.env` (confirmed gitignored, never committed, never echoed in any output); `.env.example` has an empty placeholder.
+
+**New files:**
+- `backend/app/knowledge/docs/*.md` — 10 self-written docs (paraphrased general best practice, not copied from any Cat manual), **48 total chunks**: `seatbelt-safety`, `proximity-awareness`, `adverse-weather-operation`, `idle-management`, `fuel-efficiency`, `pre-start-inspection`, `heat-stress`, `excavation-basics`, `machine-health-warnings`, `truck-loading-coordination`.
+- `backend/app/knowledge/retriever.py` — `load_chunks()` (YAML front matter + `##`-split, `chunk_id = f"{doc_id}#{slugify(heading)}"`, fails loudly on duplicates), `KnowledgeRetriever` (BM25 via `rank_bm25`, tag match ×1.5 boost, deterministic tie-break by `chunk_id`), `query_for_incident()`.
+- `backend/app/api/knowledge.py` — `GET /knowledge/chunks/{chunk_id}` for citation chips.
+- `backend/app/genai/schemas.py` — `IncidentExplanationLLM` (Pydantic, used both to constrain the LLM's output and to validate what comes back) + `llm_json_schema()` (hand-flattened JSON Schema — see bug below for why not `.model_json_schema()` directly).
+- `backend/app/genai/packet.py` — `build_incident_packet()` (bounded, deterministic: timeline ≤`packet_max_timeline`, events ≤`packet_max_events` with a per-event-type evidence whitelist, machine/task/ETA/context/attribution/history/knowledge, explicit `allowed_event_ids`/`allowed_chunk_ids`, `operator_id` as an opaque string only), `packet_hash()`.
+- `backend/app/genai/prompts.py` — `PROMPT_VERSION`, `SYSTEM_PROMPT` (packet-only, probable-cause wording, treats packet content as data not instructions), `build_user_prompt()`, `build_retry_prompt()`.
+- `backend/app/genai/client.py` (rewritten from stubs) — `generate_explanation()` using `AsyncGroq`, `LLMUnavailable(reason)` (`NO_API_KEY|TIMEOUT|API_ERROR|MALFORMED`); no key → no network call; never logs the key or full prompt.
+- `scripts/try_llm.py` — one-off manual verification script (key never printed).
+- Tests: `backend/tests/unit/test_retriever.py` (11), `test_llm_client.py` (7, renamed from the plan's `test_gemini_client.py`), `test_packet.py` (6, integration-flavored, needs DB).
+
+**Two real bugs found — one via the offline test suite, one only surfaced by calling the real API:**
+1. **Timeline truncation could return *more* entries than the configured max, with duplicates.** `keep_recent = packet_max_timeline - 10` goes negative when the max is configured below 10 (exercised by a test setting `packet_max_timeline=5`); the resulting negative-index slice wrapped around and returned overlapping head/tail entries — 11 entries for a max of 5. Fixed by capping the head portion at `min(10, packet_max_timeline)` and only taking a tail slice when there's budget left for one.
+2. **The JSON Schema sent to Groq didn't encode array length bounds.** `llm_json_schema()` only had `"type": "array", "items": {...}}` for the `*_refs` fields — no `minItems`/`maxItems` — so the model was free to return e.g. 5 `lesson.knowledge_refs` while `IncidentExplanationLLM`'s own `Field(max_length=3)` then rejected it. Found by running `scripts/try_llm.py` against a real incident with the real API (not by any test — the mocked client tests all use fixed, already-valid response fixtures, so this gap was invisible to them). Confirmed Groq's strict `json_schema` mode does respect `minItems`/`maxItems`/`maxLength` once added, by rerunning the same script.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest backend/tests/unit/test_retriever.py backend/tests/unit/test_llm_client.py backend/tests/unit/test_packet.py -q
+24 passed in 1.39s
+```
+(targeted run per current test-suite-cadence preference; full-suite run deferred to the next natural checkpoint.)
+
+**Manual verification — real Groq API call against a real incident (`scripts/try_llm.py`), after the schema fix:**
+- `model=openai/gpt-oss-20b`, `latency_ms=2476.7` (well inside the 8s timeout budget), `usage: {prompt_tokens: 3026, completion_tokens: 1332}`.
+- Output validated cleanly against `IncidentExplanationLLM`. Every `evidence_refs` entry was one of the packet's 2 `allowed_event_ids`; every `knowledge_refs`/`training_refs` entry was one of the packet's 5 `allowed_chunk_ids` — zero invented references, unprompted (no retry needed to achieve this).
+- Language stayed correctly hedged throughout ("probable cause", "may have contributed") — no "caused" or "root cause is" phrasing, matching the system prompt's rule, again without needing a retry.
+- Confirmed earlier, before the schema fix: the *first* real-API call (max-item bounds missing) genuinely failed Pydantic validation with 5 `lesson.knowledge_refs` against a max of 3 — this is exactly the class of failure Batch 3H's retry-once-then-fallback exists to handle, and it's now less likely to trigger on the first attempt.
+
+**Known limitations / deferred:**
+- No tool calling, per the phase requirement — the packet is the only input the model ever sees.
+- Grounding *validation* (rejecting a response that cites an id outside `allowed_event_ids`/`allowed_chunk_ids`, the retry loop, and the deterministic fallback) is Batch 3H, not this one — this batch only confirms the model *tends* to stay grounded when asked to, not that anything enforces it yet.
+- `KnowledgeRetriever` is currently instantiated fresh per-process (module-level lazy singleton in `api/knowledge.py`); the cold worker (3H) will need its own instance — trivial, since construction is cheap (48 chunks, <1ms to load).
+
+**Next:** Batch 3H (Cold worker + grounding + fallback), awaiting approval.

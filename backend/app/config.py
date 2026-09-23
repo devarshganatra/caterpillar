@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     correlator_reconcile_lookback_s: int = 900
     correlator_extend_push_throttle_s: float = 5.0
 
+    # Cold path / LLM (Stage 3 Batch 3G-3H). Uses Groq (OpenAI-compatible
+    # chat completions API) rather than Gemini — see PROGRESS.md "Batch 3G"
+    # for why. Never hardcode the model name elsewhere; read it from here.
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_timeout_s: float = 8.0
+    groq_max_retries: int = 1
+    groq_temperature: float = 0.2
+    packet_max_timeline: int = 40
+    packet_max_events: int = 25
+    knowledge_dir: str = "backend/app/knowledge/docs"
+    knowledge_top_k: int = 5
+
     @property
     def parsed_machine_hmac_keys(self) -> dict[str, str]:
         if not self.machine_hmac_keys.strip():

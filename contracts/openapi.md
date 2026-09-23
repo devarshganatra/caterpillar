@@ -29,6 +29,9 @@
 - `GET /machines/{machine_id}/snapshot` - Current state for WS reconnect: `{machine_id, site_id, snapshot_ts, hot, envelope, context, recent_events, latest_window, eta, open_incidents}`. Every field comes from Redis/DB directly; missing data is an explicit `null`/`UNAVAILABLE`, never synthesized. `hot.stale` is `true` when the last hot-worker update is >10s old.
 - `GET /machines/{machine_id}/windows?limit=` - Recent `window_aggregates` rows + `totals_s` (idle seconds per cause, summed over the returned windows).
 
+## Knowledge *(Batch 3G)*
+- `GET /knowledge/chunks/{chunk_id}` - one knowledge-base chunk (`{chunk_id, doc_id, title, heading, text}`), for rendering citation chips against `evidence_refs`/`knowledge_refs`/`training_refs` in an incident explanation.
+
 ## Admin / System
 - `GET /health` - Liveness check
 - `GET /ready` - Readiness check (Redis reachability)
