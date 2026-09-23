@@ -21,3 +21,4 @@ shap>=0.45
 rank_bm25>=0.2.2
 joblib>=1.4
 ruff>=0.4
+pydantic-settings==2.7.1

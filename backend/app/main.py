@@ -1,13 +1,48 @@
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
+import redis.asyncio as redis
+import logging
 
-app = FastAPI(title="CAT Co-Pilot API")
+from backend.app.config import settings
+from backend.app.services import stream
+from backend.app.api.ingest import router as ingest_router
+from backend.app.api.ws import router as ws_router
+from backend.app.api.auth import router as auth_router
+from backend.app.api.tasks import router as tasks_router
+from backend.app.api.audit import router as audit_router
+
+logging.basicConfig(level=settings.log_level)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info(f"Connecting to Redis at {settings.redis_url}")
+    stream.redis_client = redis.from_url(settings.redis_url)
+    yield
+    # Shutdown
+    if stream.redis_client:
+        await stream.redis_client.close()
+
+app = FastAPI(title="CAT Co-Pilot API", lifespan=lifespan)
+
+app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
+app.include_router(ws_router, prefix="/ws", tags=["ws"])
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+app.include_router(audit_router, prefix="/audit", tags=["audit"])
 
 @app.get("/health")
 async def health_check():
-    return JSONResponse({"status": "ok"})
+    return {"status": "ok"}
 
 @app.get("/ready")
 async def readiness_check():
-    # To be expanded with DB/Redis checks
-    return JSONResponse({"status": "ready"})
+    # Example readiness check: verify Redis is reachable
+    if stream.redis_client:
+        try:
+            await stream.redis_client.ping()
+            return {"status": "ready"}
+        except Exception:
+            return {"status": "unready", "detail": "Redis unavailable"}
+    return {"status": "unready"}

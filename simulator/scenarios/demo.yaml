@@ -1,0 +1,27 @@
+- at: 20s
+  context:
+    site_id: SITE-A
+    weather: RAIN
+    rainfall_mm_h: 12
+    ground: MUDDY
+
+- at: 30s
+  machine_id: EXC001
+  set:
+    seatbelt: UNFASTENED
+
+- at: 40s
+  machine_id: EXC001
+  repeat:
+    every: 6s
+    times: 4
+    set:
+      proximity:
+        zone: ORANGE
+        distance_m: 5.5
+        source: camera_rear
+
+- at: 75s
+  machine_id: EXC001
+  set:
+    seatbelt: FASTENED
