@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta
 
 up:
 	docker-compose up -d
@@ -36,3 +36,6 @@ gen-data-tiny:
 
 test-ml:
 	PYTHONPATH=. venv/bin/python -m pytest ml/tests/ -v
+
+train-eta:
+	PYTHONPATH=. venv/bin/python -m ml.train_eta --data ml/data --out ml/artifacts --seed 42

@@ -1,0 +1,96 @@
+{
+  "model_version": "eta-20260924-s42-e26fa3fd",
+  "feature_columns": [
+    "target_cycles",
+    "machine_age_years",
+    "rainfall_mm_h",
+    "visibility_m",
+    "wind_kmh",
+    "ambient_temp_c",
+    "hauler_queue_mean",
+    "ground__DRY",
+    "ground__WET",
+    "ground__MUDDY",
+    "ground__ICY",
+    "machine_type__EXCAVATOR",
+    "machine_type__LOADER",
+    "operator_skill__EXPERT",
+    "operator_skill__INTERMEDIATE",
+    "operator_skill__BEGINNER",
+    "task_type__BULK_EXCAVATION",
+    "task_type__GRADING",
+    "task_type__STOCKPILE_MGMT",
+    "task_type__TRENCHING",
+    "task_type__TRUCK_LOADING",
+    "weather__SUNNY",
+    "weather__CLOUDY",
+    "weather__WINDY",
+    "weather__RAIN"
+  ],
+  "categorical_levels": {
+    "task_type": [
+      "BULK_EXCAVATION",
+      "GRADING",
+      "STOCKPILE_MGMT",
+      "TRENCHING",
+      "TRUCK_LOADING"
+    ],
+    "machine_type": [
+      "EXCAVATOR",
+      "LOADER"
+    ],
+    "operator_skill": [
+      "EXPERT",
+      "INTERMEDIATE",
+      "BEGINNER"
+    ],
+    "weather": [
+      "SUNNY",
+      "CLOUDY",
+      "WINDY",
+      "RAIN"
+    ],
+    "ground": [
+      "DRY",
+      "WET",
+      "MUDDY",
+      "ICY"
+    ]
+  },
+  "factor_groups": {
+    "Weather": [
+      "weather",
+      "rainfall_mm_h",
+      "visibility_m",
+      "wind_kmh",
+      "ambient_temp_c"
+    ],
+    "Ground": [
+      "ground"
+    ],
+    "Operator": [
+      "operator_skill"
+    ],
+    "Machine": [
+      "machine_type",
+      "machine_age_years"
+    ],
+    "Site queue": [
+      "hauler_queue_mean"
+    ],
+    "Task scope": [
+      "task_type",
+      "target_cycles"
+    ]
+  },
+  "target_unit": "sim_minutes",
+  "n_train": 2078,
+  "n_val": 277,
+  "val_mae_p50": 5.5830017897259925,
+  "lib_versions": {
+    "xgboost": "3.4.1",
+    "sklearn": "1.9.1",
+    "numpy": "2.5.3"
+  },
+  "training_seconds": 0.85
+}

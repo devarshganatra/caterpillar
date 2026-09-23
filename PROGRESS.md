@@ -235,3 +235,49 @@ Anomaly rate by split (full profile): train 2.55%, val 2.59%, test 2.33% — clo
 - `PLANNED` break is inserted once per machine per day at a fixed elapsed time (4h in), not tied to a specific wall-clock time window — simpler than a global 12:00–12:30 UTC window while still being deterministic and evenly distributed.
 
 **Next:** Batch 3B (ETA prediction + explainability + live blending), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3B: ETA prediction + explainability + live blending  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** train P50 (point) and P10/P90 (quantile) XGBoost ETA models, grouped SHAP factor explanations in minutes with a task-type background, and pure/tested `blend()` (live ETA update from observed progress) and `slip()` (ETA_SLIP threshold) functions. Wiring into the warm worker is Batch 3D — this batch is training + a standalone service layer only.
+
+**New files:**
+- `contracts/intelligence.py` — `EtaFactor`, `EtaEstimate` (additive; `UiPushType.eta` already existed from before Stage 3).
+- `backend/app/services/ml_registry.py` — lazy singleton `ModelRegistry`/`get_registry()`. Loads `ml/artifacts/eta_*`, checks trained-vs-installed `xgboost`/`sklearn` major.minor versions, and degrades to `MISSING`/`VERSION_MISMATCH`/`LOAD_ERROR` instead of raising — every downstream caller (`eta.py`, and `attribution.py`/`anomaly.py` in Batch 3C) goes through this rather than loading files itself.
+- `ml/train_eta.py` — trains `eta_p50.json` (`reg:absoluteerror`) and `eta_q.json` (`reg:quantileerror`, α=[0.1,0.9]) as portable XGBoost JSON, a per-task-type SHAP background sample (`eta_background.npz`, ≤100 rows/type), and `eta_meta.json` (model version, feature columns, factor groups, val MAE, lib versions).
+- `backend/app/services/eta.py` — `predict_task()`, `explain()` (SHAP TreeExplainer, grouped into `ETA_FACTOR_GROUPS`), `blend()` (live ETA = model/observed weighted by progress), `slip()` (ETA_SLIP band + severity).
+- `ml/tests/test_train_eta.py` (3), `backend/tests/unit/test_eta_service.py` (16).
+- `Makefile`: `train-eta` target.
+- `backend/app/config.py`: added `ml_artifacts_dir`, `eta_slip_threshold` (0.10), `eta_slip_warning_threshold` (0.25), `eta_min_cycles_for_blend` (3).
+
+**Environment note (M1-specific):** XGBoost failed to import with `Library not loaded: @rpath/libomp.dylib` — this Mac had no OpenMP runtime installed system-wide (a pip-level dependency gap, `pip install xgboost` alone is not enough on macOS ARM). Fixed with `brew install libomp`. **This is a one-time host setup step, not a code change** — anyone else running this repo's ML code on macOS will need it too; recorded here so it isn't rediscovered.
+
+**Bug found and fixed via the test suite (not just tuned away):** SHAP factors are rounded to 1 decimal place for display (ARCH 6.8: "expressed in meaningful units"), but summing several independently-rounded factors could drift up to ~0.12 min from the displayed p50 (`test_shap_additivity` caught this at 0.05 tolerance). ARCH 6.8 requires the displayed breakdown to sum **exactly**, so `predict_task()` now absorbs the rounding residual into the largest-magnitude factor after rounding, guaranteeing `base + Σ factors == p50` to float precision, not just approximately.
+
+**Also found: SHAP `interventional` perturbation initially raised `NotImplementedError: Categorical split is not yet supported`** on this shap 0.52 + xgboost 3.4.1 combination, even with plain one-hot/numeric features (no pandas categorical dtype). Root cause: XGBoost's `enable_categorical` flag. Fixed by passing `enable_categorical=False` explicitly to `XGBRegressor` in `ml/train_eta.py` — without it, `SHAP TreeExplainer(..., feature_perturbation="interventional")` cannot be used at all on this stack, so this isn't optional tuning.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+85 passed in 40.11s
+```
+(66 prior + 19 new: 3 `test_train_eta.py`, 16 `test_eta_service.py`.)
+
+**Manual verification (measured):**
+- `make train-eta` on the full 60-day dataset (`ml/data/`, 2,078 train / 277 val tasks): **0.85s** training time, `val_mae_p50 = 5.58 sim-minutes`. **This is a validation-set number, not test-set** — the honest test-set MAE (and MAE-vs-planner-estimate comparison) is Batch 3C's `evaluate.py`, per the plan.
+- Live prediction sanity check (`ml/artifacts` loaded via the real registry):
+  - SUNNY/EXPERT: P50=38.65 [36.83–52.53] min
+  - RAIN+MUDDY, same task: P50=56.05 min (higher, correct direction)
+  - BEGINNER vs EXPERT, same task: P50=54.6 vs 38.65 min (higher, correct direction)
+  - Factor breakdown for SUNNY/EXPERT example: Weather −4.2, Ground −0.8, Operator −5.1, Machine −1.3, Site queue 0.0, Task scope +2.6 (all in minutes, sum to p50 exactly by construction).
+
+**Artifact sizes:** `eta_p50.json` 1.4MB, `eta_q.json` 3.4MB, `eta_background.npz` 100KB, `eta_meta.json` 4KB — all committed to `ml/artifacts/` (small, needed at runtime, per the plan).
+
+**Known limitations / deferred:**
+- No online/incremental retraining — models are static artifacts until someone reruns `make train-eta`.
+- `blend()`/`slip()` are pure functions, unit-tested in isolation; their wiring into a live task's running state (persisting `last_emitted_band`, computing `observed_cycle_s` from real window aggregates) happens in Batch 3D's warm worker, not here.
+
+**Next:** Batch 3C (Idle attribution + anomaly detection + evaluation), awaiting approval.
