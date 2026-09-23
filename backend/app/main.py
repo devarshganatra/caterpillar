@@ -10,6 +10,9 @@ from backend.app.api.ws import router as ws_router
 from backend.app.api.auth import router as auth_router
 from backend.app.api.tasks import router as tasks_router
 from backend.app.api.audit import router as audit_router
+from backend.app.api.incidents import router as incidents_router
+from backend.app.api.machines import router as machines_router
+from backend.app.api.admin import router as admin_router
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -31,6 +34,9 @@ app.include_router(ws_router, prefix="/ws", tags=["ws"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 app.include_router(audit_router, prefix="/audit", tags=["audit"])
+app.include_router(incidents_router, prefix="/incidents", tags=["incidents"])
+app.include_router(machines_router, prefix="/machines", tags=["machines"])
+app.include_router(admin_router, prefix="/admin", tags=["admin"])
 
 @app.get("/health")
 async def health_check():

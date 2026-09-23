@@ -432,3 +432,60 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/
 - `_lookup_task_id` picks the most recent `window_aggregates` row at or before the event's timestamp; if the warm worker hasn't closed a window yet for a brand-new task, an incident opens with `task_id=None` until one does. Not revisited — acceptable given incidents open on safety events that fire well before a 30s window closes anyway.
 
 **Next:** Batch 3F (Incident APIs + snapshot + backend integration), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3F: Incident APIs + snapshot + backend integration  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** RBAC-protected incident APIs with audited mutations, a machine snapshot endpoint for WS reconnect, ETA/window read endpoints, and a worker-status endpoint.
+
+**New endpoint list:**
+| Endpoint | Roles | Notes |
+|---|---|---|
+| `GET /incidents` | any | OPERATOR: own only; SUPERVISOR: their sites only (403 if `site_id` filter is out of scope); ADMIN: all |
+| `GET /incidents/{id}` | any, scoped | 404 missing, 403 out of scope; includes `explanation` (null until Batch 3H) |
+| `GET /incidents/{id}/timeline` | any, scoped | ordered `(first_ts, id)`, each with `representative_event` |
+| `POST /incidents/{id}/ack` | SUPERVISOR, ADMIN | OPEN→ACKNOWLEDGED only, else 409; audited `INCIDENT_ACK` |
+| `POST /incidents/{id}/close` | SUPERVISOR, ADMIN | OPEN\|ACKNOWLEDGED→CLOSED only, else 409; audited `INCIDENT_CLOSE` (payload carries `note_sha256`, not the note text) |
+| `GET /machines/{id}/snapshot` | any, site-scoped | hot state, envelope, context, recent events, latest window, ETA, open incidents — every field from Redis/DB, explicit null/UNAVAILABLE otherwise |
+| `GET /machines/{id}/windows` | any, site-scoped | recent `window_aggregates` + `totals_s` per idle cause |
+| `GET /tasks/{task_id}/eta` | own/site-scoped | latest LIVE, else BASELINE, else UNAVAILABLE |
+| `GET /admin/workers` | ADMIN | `worker:status:*` + consumer-group lag |
+
+**Files:** `backend/app/api/incidents.py`, `backend/app/api/machines.py`, `backend/app/api/admin.py` (new); `tasks.py`, `main.py` (modified, router registration); `contracts/openapi.md` (corrected stale paths from earlier stages and documented every new endpoint + `UiPush` payload shape).
+
+**RBAC table** (verified by `tests/integration/test_incident_api.py`):
+| Actor | Own incident | Other operator's / out-of-scope site | Admin |
+|---|---|---|---|
+| OPERATOR | 200 | 403 | — |
+| SUPERVISOR (their site) | 200 | 403 (other site) | — |
+| ADMIN | 200 | 200 | 200 |
+| unauthenticated | 401 | 401 | 401 |
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/integration/test_incident_api.py tests/integration/test_snapshot.py -q
+16 passed in 3.49s
+```
+(10 incident API, 6 snapshot — targeted runs per current test-suite-cadence preference; full-suite run deferred to the next natural checkpoint.)
+
+**Two real issues found and fixed while writing the tests (both about how `TestClient` behaves, not app-code bugs — but worth recording since they'd trip up anyone extending this suite):**
+1. `TestClient(app)` constructed at module scope — the pattern this repo already uses in `tests/test_batch4.py` — does **not** run FastAPI's `lifespan` handler unless used as a `with` block. `main.py`'s `stream.redis_client = redis.from_url(...)` therefore never executes, so any Redis-dependent endpoint (snapshot) 503'd in tests. Fixed with an explicit per-test fixture that sets `stream.redis_client` directly, mirroring what the lifespan does in production.
+2. That fixture had to be **function-scoped, not module-level**: a `redis.asyncio.Redis` client's connection binds to whatever event loop is running when first used, and pytest-asyncio gives each async test its own loop — sharing one client across tests raised `RuntimeError: Event loop is closed`. The fixture's teardown `aclose()` can still hit this harmlessly (`TestClient`'s synchronous request runs the ASGI app through its own internal loop, separate from the test's), so that specific `RuntimeError` is caught and ignored at teardown only — never around the actual assertions.
+
+**Also discovered:** `tests/test_batch4.py::test_audit_tamper_evidence` (existing code, not written this session) deliberately corrupts `audit_log` and never restores it, by design (it's testing tamper *detection*). This silently poisons `GET /audit/verify` for any test that runs afterward in the same DB and expects a valid chain. Fixed by having the new ack/close audit test `TRUNCATE TABLE audit_log` at its own start — the same convention that test itself already uses — rather than assuming a clean starting state.
+
+**Manual verification (curl, full flow, real stack — API + hot worker + correlator + simulator):**
+1. `GET /incidents` (supervisor) → one incident from a live demo run (`CRITICAL`, `escalated: true`, `event_count: 113`).
+2. `GET /incidents/{id}/timeline` → 3 ordered entries (`SEATBELT_VIOLATION` ×45, `STATUS: escalated`, `PROXIMITY_BREACH:ORANGE` ×68) from the 113 raw events — bounded-timeline merge confirmed on a fresh scenario run.
+3. `POST /ack` → `{"status": "ACKNOWLEDGED"}`; `POST /close` (with note) → `{"status": "CLOSED"}`; a second close → `409`.
+4. `GET /audit/verify` → `{"valid": true}` after ack+close (confirmed on a freshly-reset chain, since the dev DB's audit_log carried pre-existing pollution from the `test_batch4.py` tamper test described above — the automated `test_ack_then_close_with_audit_trail` test proves this same flow with real assertions, including checking for the specific `INCIDENT_ACK`/`INCIDENT_CLOSE` rows).
+5. Snapshot with no data → explicit `null`/`UNAVAILABLE` fields, nothing invented. After stopping the simulator for >10s → `hot.stale: true`.
+
+**Known limitations / deferred:**
+- `GET /incidents/{id}` looks for an `IncidentExplanationRow` inside a `try/except ImportError`, since that table doesn't exist until Batch 3H — this is intentionally forward-compatible rather than a stub to revisit.
+- No pagination cursor beyond `limit`/`offset` on `GET /incidents` — fine at this scale, would need a real cursor for production incident volume.
+
+**Next:** Batch 3G (Knowledge retrieval + Gemini client), awaiting approval.
