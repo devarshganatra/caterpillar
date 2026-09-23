@@ -340,3 +340,50 @@ IF recall by injected type: `HIGH_FUEL_PER_CYCLE` 1.5%, `HOT_ENGINE` 10.9%, `ERR
 - `np.trapz` was removed in numpy 2.x (renamed `np.trapezoid`); `ml/evaluate.py`'s PR-AUC helper handles both.
 
 **Next:** Batch 3D (Warm worker + window processing), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3D: Warm worker + window processing  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** a separate, restart-safe worker that consumes `telemetry:{shard}` on its own consumer group (`warm-worker`), builds 30s event-time windows per machine, runs ETA/attribution/anomaly on each, persists results, emits `OPERATIONAL_ANOMALY`/`IDLE_DEVIATION`/`ETA_SLIP` events to `events:{shard}`, and pushes `eta`/`idle_attribution`/`anomaly` UI updates — without ever touching hot-path safety state.
+
+**New/changed DB schema** (migration `d6114ec31a5b_stage3_warm_path`, applied and round-trip tested up/down):
+- `users.skill_level` (nullable) — ETA/attribution default to `INTERMEDIATE` when unset.
+- `tasks.task_type`, `tasks.target_cycles`, `tasks.planned_start` (nullable) — ETA requires both `task_type` and `target_cycles`; a task missing either gets `EtaEstimate(status="UNAVAILABLE", unavailable_reason="TASK_METADATA_MISSING")`.
+- `window_aggregates` (PK `window_id`, deterministic via `contracts.ids`) — one row per closed window: features, `context`, `idle_attribution`, `anomaly` (all JSONB), plus `deviation_raw_flag`/`deviation_consecutive`/`last_eta_slip_band` for restart-safe persistence of the deviation-persistence and slip-band state across windows (no in-memory-only counters).
+- `eta_estimates` (`kind` = `BASELINE`|`LIVE`) — a **partial unique index** `(task_id) WHERE kind='BASELINE'` was added on top of the plan's `(task_id, window_id, kind)` unique constraint, because Postgres treats `NULL != NULL` and `window_id` is always `NULL` for `BASELINE` rows — the plain constraint alone would not have stopped two baseline rows for the same task.
+- `seed_db.py`: `operator` now gets `skill_level="INTERMEDIATE"`; `TASK-001`/`TASK-002` now carry `task_type`/`target_cycles`/`planned_start` so the demo tasks actually get ETA predictions.
+
+**New files:**
+- `backend/app/worker/warm.py` — `OpenWindow`, `WarmProcessor` (`handle_message`, `close_window`, `flush_stale`, `recover`), `main()` (4-shard consumer-group loop, own pending-replay on start, exponential backoff on error).
+- `backend/tests/unit/test_window_aggregation.py` (7) — window-boundary logic with a stubbed `close_window` (no DB needed).
+- `tests/integration/test_warm_worker.py` (6) — full `close_window` pipeline against real Postgres+Redis+`ml/artifacts`.
+
+**Two real bugs found and fixed before this batch was considered done (both concurrency/idempotency correctness issues, not cosmetic):**
+1. **Machine-wide event collision.** The initial `_insert_event` implementation used a constant `frame_seq=0` for all warm-generated events. Since the DB's idempotency constraint is `(machine_id, frame_seq, type)`, every subsequent `OPERATIONAL_ANOMALY` (or any other warm event type) for the same machine would have collided with the first one ever inserted and been silently dropped by `ON CONFLICT DO NOTHING` — the plan's own spec ("frame_seq = last_seq of the window") was correct and I'd initially missed implementing it; caught by re-reading the plan against the code rather than by a test (worth flagging: this is exactly the kind of bug that only shows up after the SECOND anomaly on the same machine, so a single-window integration test would not have caught it either).
+2. **Race condition via shared mutable state.** The ETA slip band was initially passed from `_compute_eta` to `_full_row` via a `self._last_slip_band` instance attribute on `WarmProcessor` — but different machines' `close_window()` calls run concurrently as separate asyncio tasks against the *same* `WarmProcessor` instance (one per shard), so one machine's band could be overwritten by another's before it was read back. Fixed by returning the band explicitly through the call chain instead of stashing it on `self`.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+132 passed in 86.70s
+```
+(119 prior + 13 new: 7 unit, 6 integration.)
+
+**Manual verification — full stack (API + hot + warm workers + simulator), measured:**
+1. Ran the real `demo.yaml` scenario against `EXC001` for ~30s wall-clock (SIM_SPEED=10). Two windows closed with real inference: `latency_ms` 366 and 547 (first-call model/explainer construction overhead included).
+2. Idle attribution: window 1 → `primary_cause: SITE` (44s SITE / 31s OPERATOR, low truck presence early on); window 2 → `primary_cause: OPERATOR` (90s SITE / 183s OPERATOR) — both with real `weather: RAIN` context from the scenario's context frame, confirming the warm worker reads the same `context:{site_id}` hash Batch 3.0 wired up.
+3. ETA: exactly 1 `BASELINE` row and one `LIVE` row per window (2 `LIVE` rows total), factors correctly attributing +7.5 min to Weather (rainfall_mm_h=12) for this task.
+4. Anomaly: window 1 → `SKIPPED/NOT_WORKING_WINDOW` (machine still idle); window 2 → `IFOREST`, score 0.985 ≥ 0.97 threshold, `is_anomalous=true`, top driver `temp_slope` (z=18.4) — this is the **same cold-start artifact documented in Batch 3C's evaluation** (the first working window after a machine starts genuinely has an unusual temp_slope), now observed live in the real pipeline rather than just in offline evaluation — consistent, not a new bug.
+5. Confirmed the `OPERATIONAL_ANOMALY` event landed on `events:1` (EXC001's shard) with the correct `source_engine: anomaly@iforest-...` and full driver evidence, ready for the correlator (Batch 3E).
+6. **Restart test**: cleared DB, ran the simulator, `kill -9` the warm worker mid-window at t=4s. `XPENDING telemetry:1 warm-worker` confirmed 32 delivered-but-unacked messages at that instant. Restarted the worker (fresh process, `recover()` from DB): it replayed the 32 pending entries automatically, closed 2 windows totalling 106 frames, `XPENDING` drained to 0. Verified in `window_aggregates`: exactly 2 rows, contiguous `first_seq`/`last_seq` (1→86, 87→106) — **no duplicate rows, no gap, no double-count** despite the hard kill.
+7. `worker:status:warm` hash confirmed populated (`last_ok_ts`, `last_latency_ms`).
+
+**Known limitations / deferred:**
+- `classify_idle_frames` is called with a synthetic `ts_start + i*sim_seconds_per_frame` timestamp grid rather than each frame's own (slightly jittery) real timestamp, for the `PLANNED` break check specifically — documented in the plan as an acceptable approximation; not revisited here.
+- The non-authoritative per-frame `is_idle` signal (feeding `idle_ratio`) is derived directly from `hydraulic_pressure_bar < 50 and speed < 0.5`, not by calling `core.copilot_core.state.classify_state` sequentially as the plan originally sketched — this avoids needing to carry hysteresis/dwell state across windows per machine (another source of restart-complexity) for a feature that's explicitly non-safety-critical and already documented as an approximation. If dwell-accurate idle classification turns out to matter for a later batch, it can be added without changing the warm worker's persisted schema.
+- Full-throughput latency (largest window, 273 frames) was 547ms — fine for a 30s window cadence, but not yet load-tested at the 500-machine scale ARCH's back-of-envelope section discusses.
+
+**Next:** Batch 3E (Event correlation + incident persistence), awaiting approval.

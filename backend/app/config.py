@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     sim_speed: int = 10
     log_level: str = "INFO"
 
+    # Warm worker (Stage 3 Batch 3D)
+    warm_window_seconds: int = 30
+    warm_allowed_lateness_s: int = 5
+    warm_min_frames: int = 20
+    warm_idle_flush_s: int = 40
+    sim_seconds_per_frame: float = 1.0
+
     # ML / intelligence layer (Stage 3)
     ml_artifacts_dir: str = "ml/artifacts"
     eta_slip_threshold: float = 0.10          # ARCH: "ETA slip over 10% emits ETA_SLIP"

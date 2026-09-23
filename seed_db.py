@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.dialects.postgresql import insert
@@ -42,16 +43,20 @@ async def main():
             (admin_id, "admin", RoleEnum.ADMIN, "Eve Admin")
         ]
         for uid, username, role, name in users:
+            # Stage 3: the demo operator needs a skill level for ETA/idle-attribution
+            # features to use real data instead of the INTERMEDIATE default.
+            skill_level = "INTERMEDIATE" if username == "operator" else None
             stmt = insert(User).values(
                 id=uid,
                 username=username,
                 hashed_password=demo_password_hash,
                 role=role,
                 name=name,
-                is_active=True
+                is_active=True,
+                skill_level=skill_level
             ).on_conflict_do_update(
                 index_elements=["username"],
-                set_=dict(role=role, name=name, is_active=True)
+                set_=dict(role=role, name=name, is_active=True, skill_level=skill_level)
             )
             await session.execute(stmt)
             
@@ -73,26 +78,33 @@ async def main():
             await session.execute(stmt)
             
         # 4. Tasks
+        # Stage 3: task_type/target_cycles let ETA prediction run for these
+        # tasks (warm.py requires both to be non-null); task_type values
+        # must be from ml.constants.TASK_TYPE_NAMES.
+        today_8am = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
         tasks = [
-            ("TASK-001", operator_id, "EXC001", "SITE-A", TaskStatusEnum.ACTIVE, 120),
-            ("TASK-002", operator_id, "LDR001", "SITE-A", TaskStatusEnum.PLANNED, 60),
+            ("TASK-001", operator_id, "EXC001", "SITE-A", TaskStatusEnum.ACTIVE, 120, "TRUCK_LOADING", 60),
+            ("TASK-002", operator_id, "LDR001", "SITE-A", TaskStatusEnum.PLANNED, 60, "STOCKPILE_MGMT", 40),
         ]
-        for tid, op_id, mach_id, sid, status, dur in tasks:
+        for tid, op_id, mach_id, sid, status, dur, task_type, target_cycles in tasks:
             # Application-level validation enforced during seeding:
             # Task site_id MUST match machine site_id
             machine_site_id = MACHINES[mach_id].site_id
             assert sid == machine_site_id, f"Consistency Error: Task {tid} site {sid} != Machine {mach_id} site {machine_site_id}"
-            
+
             stmt = insert(Task).values(
                 id=tid,
                 operator_id=op_id,
                 machine_id=mach_id,
                 site_id=sid,
                 status=status,
-                est_duration_minutes=dur
+                est_duration_minutes=dur,
+                task_type=task_type,
+                target_cycles=target_cycles,
+                planned_start=today_8am,
             ).on_conflict_do_update(
                 index_elements=["id"],
-                set_=dict(status=status)
+                set_=dict(status=status, task_type=task_type, target_cycles=target_cycles, planned_start=today_8am)
             )
             await session.execute(stmt)
             

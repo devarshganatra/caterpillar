@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train worker-warm
 
 up:
 	docker-compose up -d
@@ -51,3 +51,6 @@ evaluate:
 
 # Full pipeline per BUILD_PLAN_new.md section 7: generate -> train -> evaluate.
 train: gen-data train-eta baselines train-anomaly evaluate
+
+worker-warm:
+	PYTHONPATH=. venv/bin/python -m backend.app.worker.warm

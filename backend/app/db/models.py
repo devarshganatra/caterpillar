@@ -125,6 +125,9 @@ class User(Base):
     role = Column(SQLAlchemyEnum(RoleEnum), nullable=False)
     name = Column(String(128), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    # Stage 3: operator skill level, used by ETA/idle-attribution features.
+    # NULL means unknown -> serving layer defaults to INTERMEDIATE.
+    skill_level = Column(String(16), nullable=True)  # EXPERT | INTERMEDIATE | BEGINNER
 
 
 class UserSiteAccess(Base):
@@ -145,6 +148,94 @@ class Task(Base):
     site_id = Column(String(32), nullable=False)
     status = Column(SQLAlchemyEnum(TaskStatusEnum), nullable=False, default=TaskStatusEnum.PLANNED)
     est_duration_minutes = Column(Integer, nullable=True)
+    # Stage 3: ETA prediction needs these; NULL means "no ETA available for this task"
+    # (warm.py checks for this explicitly rather than guessing values).
+    task_type = Column(String(32), nullable=True)  # matches ml.constants.TASK_TYPE_NAMES
+    target_cycles = Column(Integer, nullable=True)
+    planned_start = Column(DateTime(timezone=True), nullable=True)
+
+
+class WindowAggregate(Base):
+    """
+    One row per 30s (configurable) event-time window per machine, produced
+    by the warm worker (Batch 3D). window_id is deterministic
+    (contracts.ids.window_id), so ON CONFLICT DO NOTHING makes closing the
+    same window twice (e.g. after a worker restart) a no-op.
+    """
+    __tablename__ = "window_aggregates"
+
+    window_id = Column(String(64), primary_key=True)
+    machine_id = Column(String(32), ForeignKey("machines.id"), nullable=False)
+    site_id = Column(String(32), nullable=False)
+    operator_id = Column(String(64), nullable=False)
+    task_id = Column(String(64), nullable=True)
+    window_start = Column(DateTime(timezone=True), nullable=False)
+    window_end = Column(DateTime(timezone=True), nullable=False)
+    frame_count = Column(Integer, nullable=False, default=0)
+    first_seq = Column(Integer, nullable=True)
+    last_seq = Column(Integer, nullable=True)
+    late_frames = Column(Integer, nullable=False, default=0)
+
+    # WINDOW_FEATURES (ml.constants) + a few descriptive extras; NULL when
+    # the window had too few frames to compute a feature.
+    fuel_per_cycle = Column(Float, nullable=True)
+    rpm_mean = Column(Float, nullable=True)
+    rpm_std = Column(Float, nullable=True)
+    hyd_p95 = Column(Float, nullable=True)
+    idle_ratio = Column(Float, nullable=True)
+    cycle_count = Column(Integer, nullable=True)
+    cycle_time_mean = Column(Float, nullable=True)
+    cycle_time_cv = Column(Float, nullable=True)
+    temp_slope = Column(Float, nullable=True)
+    working_ratio = Column(Float, nullable=True)
+    truck_present_ratio = Column(Float, nullable=True)
+    hauler_queue_mean = Column(Float, nullable=True)
+    fuel_l_total = Column(Float, nullable=True)
+
+    alerts_count = Column(Integer, nullable=False, default=0)
+    context = Column(JSONB, nullable=True)
+    idle_attribution = Column(JSONB, nullable=True)
+    anomaly = Column(JSONB, nullable=True)
+    # Deviation raw-flag bookkeeping for operator_deviation()'s persistence
+    # rule (>= idle_dev_persist_windows CONSECUTIVE raw flags). Not part of
+    # any contract; internal warm-worker state, restart-safe via the DB.
+    deviation_raw_flag = Column(Boolean, nullable=False, default=False)
+    deviation_consecutive = Column(Integer, nullable=False, default=0)
+    last_eta_slip_band = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_window_aggregates_machine_start", "machine_id", "window_start"),
+    )
+
+
+class EtaEstimateRow(Base):
+    """
+    One row per ETA computation. kind='BASELINE' is the task-start prediction
+    (at most one per task, enforced by uq_eta_baseline_per_task); kind='LIVE'
+    is the blended live estimate, one per (task, window).
+    """
+    __tablename__ = "eta_estimates"
+
+    id = Column(Integer, Identity(start=1, cycle=False), primary_key=True)
+    task_id = Column(String(64), ForeignKey("tasks.id"), nullable=False)
+    machine_id = Column(String(32), nullable=False)
+    window_id = Column(String(64), nullable=True)
+    ts = Column(DateTime(timezone=True), nullable=False)
+    kind = Column(String(16), nullable=False)  # BASELINE | LIVE
+    payload = Column(JSONB, nullable=False)    # full EtaEstimate
+    model_version = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        # Postgres treats NULL != NULL, so a plain UNIQUE(task_id, window_id,
+        # kind) would NOT stop two BASELINE rows (window_id always NULL for
+        # BASELINE) for the same task — hence the separate partial index.
+        UniqueConstraint("task_id", "window_id", "kind", name="uq_eta_task_window_kind"),
+        Index("uq_eta_baseline_per_task", "task_id", unique=True,
+              postgresql_where=text("kind = 'BASELINE'")),
+        Index("ix_eta_estimates_task_ts", "task_id", "ts"),
+    )
 
 
 class AuditLog(Base):

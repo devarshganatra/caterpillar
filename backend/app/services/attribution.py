@@ -118,7 +118,8 @@ def attribute_window(
 
 
 class DeviationResult:
-    def __init__(self, status, expected_idle_ratio, deviation_ratio, z, baseline_level, flag, raw_flag):
+    def __init__(self, status, expected_idle_ratio, deviation_ratio, z, baseline_level, flag, raw_flag,
+                 consecutive_windows=0):
         self.status = status
         self.expected_idle_ratio = expected_idle_ratio
         self.deviation_ratio = deviation_ratio
@@ -126,6 +127,11 @@ class DeviationResult:
         self.baseline_level = baseline_level
         self.operator_deviation_flag = flag
         self.raw_flag = raw_flag
+        # Consecutive raw-flag count INCLUDING this window — the warm worker
+        # persists this on the window row so the NEXT window's
+        # prev_consecutive_raw_flags can be read back after a restart
+        # (restart-safety requirement: no in-memory-only counters).
+        self.consecutive_windows = consecutive_windows
 
 
 def _lookup_level(idle_baselines: dict, level: str, key: str, min_n: int) -> dict | None:
@@ -182,4 +188,5 @@ def operator_deviation(
     return DeviationResult(
         status="OK", expected_idle_ratio=round(expected, 4), deviation_ratio=round(ratio, 3),
         z=round(z, 3), baseline_level=level_name, flag=flag, raw_flag=raw_flag,
+        consecutive_windows=consecutive,
     )
