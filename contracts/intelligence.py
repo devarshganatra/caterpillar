@@ -47,3 +47,48 @@ class EtaEstimate(BaseModel):
 
     slip_pct: Optional[float] = None
     time_unit: Literal["sim_minutes"] = "sim_minutes"
+
+
+IdleCause = Literal["PLANNED", "MACHINE", "WEATHER", "SITE", "OPERATOR"]
+
+
+class IdleAttribution(BaseModel):
+    window_id: str
+    machine_id: str
+    operator_id: str
+    window_start: datetime
+    window_end: datetime
+
+    idle_seconds: float
+    breakdown_s: dict[str, float] = {}  # keys are IdleCause values
+    primary_cause: Optional[IdleCause] = None
+    evidence: dict = {}
+    operator_idle_ratio: float
+
+    deviation_status: Literal["OK", "UNAVAILABLE"] = "OK"
+    expected_idle_ratio: Optional[float] = None
+    deviation_ratio: Optional[float] = None
+    robust_z: Optional[float] = None
+    baseline_level: Optional[str] = None
+    operator_deviation_flag: bool = False
+    consecutive_windows: int = 0
+
+
+class AnomalyDriver(BaseModel):
+    feature: str
+    value: float
+    robust_z: float
+    shap: Optional[float] = None
+
+
+class AnomalyResult(BaseModel):
+    window_id: str
+    machine_id: str
+    method: Literal["IFOREST", "ROBUST_Z", "SKIPPED", "UNAVAILABLE"]
+    reason: Optional[str] = None
+    score: Optional[float] = None
+    threshold: Optional[float] = None
+    is_anomalous: bool = False
+    drivers: list[AnomalyDriver] = []
+    drivers_method: Optional[str] = None
+    model_version: Optional[str] = None

@@ -1,0 +1,306 @@
+{
+  "levels": {
+    "operator_context": {
+      "OP-H01||NONE||CLOUDY||EXPERT": {
+        "n": 249,
+        "ewma": 0.3307,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H01||NONE||RAIN||EXPERT": {
+        "n": 102,
+        "ewma": 0.0448,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H01||NONE||SUNNY||EXPERT": {
+        "n": 402,
+        "ewma": 0.3149,
+        "median": 1.0,
+        "mad": 0.0
+      },
+      "OP-H01||NONE||WINDY||EXPERT": {
+        "n": 122,
+        "ewma": 0.0754,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H02||NONE||CLOUDY||EXPERT": {
+        "n": 142,
+        "ewma": 0.1491,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H02||NONE||RAIN||EXPERT": {
+        "n": 70,
+        "ewma": 0.1005,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H02||NONE||SUNNY||EXPERT": {
+        "n": 206,
+        "ewma": 0.0755,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H02||NONE||WINDY||EXPERT": {
+        "n": 85,
+        "ewma": 0.0702,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H03||NONE||CLOUDY||INTERMEDIATE": {
+        "n": 175,
+        "ewma": 0.0052,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H03||NONE||RAIN||INTERMEDIATE": {
+        "n": 57,
+        "ewma": 0.0185,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H03||NONE||SUNNY||INTERMEDIATE": {
+        "n": 263,
+        "ewma": 0.0442,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H03||NONE||WINDY||INTERMEDIATE": {
+        "n": 91,
+        "ewma": 0.0021,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H04||NONE||CLOUDY||INTERMEDIATE": {
+        "n": 116,
+        "ewma": 0.2893,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H04||NONE||RAIN||INTERMEDIATE": {
+        "n": 80,
+        "ewma": 0.1901,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H04||NONE||SUNNY||INTERMEDIATE": {
+        "n": 233,
+        "ewma": 0.2987,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H04||NONE||WINDY||INTERMEDIATE": {
+        "n": 74,
+        "ewma": 0.1508,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H05||NONE||CLOUDY||INTERMEDIATE": {
+        "n": 133,
+        "ewma": 0.0516,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H05||NONE||RAIN||INTERMEDIATE": {
+        "n": 65,
+        "ewma": 0.0075,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H05||NONE||SUNNY||INTERMEDIATE": {
+        "n": 264,
+        "ewma": 0.195,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H05||NONE||WINDY||INTERMEDIATE": {
+        "n": 52,
+        "ewma": 0.0015,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H06||NONE||CLOUDY||INTERMEDIATE": {
+        "n": 187,
+        "ewma": 0.0305,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H06||NONE||RAIN||INTERMEDIATE": {
+        "n": 71,
+        "ewma": 0.0578,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H06||NONE||SUNNY||INTERMEDIATE": {
+        "n": 253,
+        "ewma": 0.0941,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H06||NONE||WINDY||INTERMEDIATE": {
+        "n": 105,
+        "ewma": 0.2703,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H07||NONE||CLOUDY||BEGINNER": {
+        "n": 171,
+        "ewma": 0.0032,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H07||NONE||RAIN||BEGINNER": {
+        "n": 94,
+        "ewma": 0.0031,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H07||NONE||SUNNY||BEGINNER": {
+        "n": 290,
+        "ewma": 0.1747,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H07||NONE||WINDY||BEGINNER": {
+        "n": 109,
+        "ewma": 0.103,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H08||NONE||CLOUDY||BEGINNER": {
+        "n": 139,
+        "ewma": 0.2638,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H08||NONE||RAIN||BEGINNER": {
+        "n": 54,
+        "ewma": 0.19,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H08||NONE||SUNNY||BEGINNER": {
+        "n": 254,
+        "ewma": 0.0055,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "OP-H08||NONE||WINDY||BEGINNER": {
+        "n": 72,
+        "ewma": 0.0053,
+        "median": 0.0,
+        "mad": 0.0
+      }
+    },
+    "skill_context": {
+      "BEGINNER||NONE||CLOUDY": {
+        "n": 310,
+        "ewma": 0.2596,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "BEGINNER||NONE||RAIN": {
+        "n": 148,
+        "ewma": 0.1258,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "BEGINNER||NONE||SUNNY": {
+        "n": 544,
+        "ewma": 0.0488,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "BEGINNER||NONE||WINDY": {
+        "n": 181,
+        "ewma": 0.087,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "EXPERT||NONE||CLOUDY": {
+        "n": 391,
+        "ewma": 0.2866,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "EXPERT||NONE||RAIN": {
+        "n": 172,
+        "ewma": 0.1022,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "EXPERT||NONE||SUNNY": {
+        "n": 608,
+        "ewma": 0.1786,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "EXPERT||NONE||WINDY": {
+        "n": 207,
+        "ewma": 0.0367,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "INTERMEDIATE||NONE||CLOUDY": {
+        "n": 611,
+        "ewma": 0.0125,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "INTERMEDIATE||NONE||RAIN": {
+        "n": 273,
+        "ewma": 0.1966,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "INTERMEDIATE||NONE||SUNNY": {
+        "n": 1013,
+        "ewma": 0.3311,
+        "median": 0.0,
+        "mad": 0.0
+      },
+      "INTERMEDIATE||NONE||WINDY": {
+        "n": 322,
+        "ewma": 0.2659,
+        "median": 0.0,
+        "mad": 0.0
+      }
+    },
+    "task_type": {
+      "NONE": {
+        "n": 4780,
+        "ewma": 0.1427,
+        "median": 0.0,
+        "mad": 0.0
+      }
+    },
+    "global": {
+      "global": {
+        "n": 4780,
+        "ewma": 0.1427,
+        "median": 0.0,
+        "mad": 0.0
+      }
+    }
+  },
+  "n_windows": 4780,
+  "key_separator": "||",
+  "key_order": {
+    "operator_context": [
+      "operator_id",
+      "task_type",
+      "weather",
+      "operator_skill"
+    ],
+    "skill_context": [
+      "operator_skill",
+      "task_type",
+      "weather"
+    ],
+    "task_type": [
+      "task_type"
+    ]
+  }
+}

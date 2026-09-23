@@ -281,3 +281,62 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/
 - `blend()`/`slip()` are pure functions, unit-tested in isolation; their wiring into a live task's running state (persisting `last_emitted_band`, computing `observed_cycle_s` from real window aggregates) happens in Batch 3D's warm worker, not here.
 
 **Next:** Batch 3C (Idle attribution + anomaly detection + evaluation), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3C: Idle attribution + anomaly detection + evaluation  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** deterministic idle attribution with operator-deviation flagging, Isolation Forest anomaly detection with percentile calibration + SHAP drivers + robust-z fallback, and honest test-split evaluation of ETA/anomaly/attribution — no numbers claimed from training data.
+
+**New files:**
+- `ml/baselines.py` — hierarchical idle-ratio baselines (operator×context → skill×context → task_type → global), written to `ml/artifacts/idle_baselines.json`.
+- `ml/train_anomaly.py` — `IsolationForest(n_estimators=200, contamination=0.03)` on `WINDOW_FEATURES`, percentile-calibrated score (1001 train-set quantiles), per-feature robust stats for the fallback → `iforest.joblib`, `iforest_meta.json`, `window_stats.json`.
+- `ml/evaluate.py` — computes ETA MAE-vs-planner, anomaly precision/recall/F1/PR-AUC (both IF and robust-z), and idle-cause confusion matrix, **all on the test split only** → `ml/artifacts/metrics.json`. Asserts `split == "test"` for every block before writing.
+- `backend/app/services/attribution.py` — `classify_idle_frames()` (the PLANNED>MACHINE>WEATHER>SITE>OPERATOR priority rule, first-match-wins), `attribute_window()`, `operator_deviation()` (hierarchical backoff + persistence).
+- `backend/app/services/anomaly.py` — `score_window()`: eligibility check → IsolationForest + SHAP drivers (cached explainer) → robust-z fallback → `UNAVAILABLE`. Never touches safety state.
+- `contracts/intelligence.py`: added `IdleAttribution`, `AnomalyDriver`, `AnomalyResult`.
+- `backend/app/services/ml_registry.py`: extended to load `iforest.joblib`/`iforest_meta.json`/`window_stats.json` (anomaly_status) and `idle_baselines.json` (baselines_status), same MISSING/VERSION_MISMATCH/LOAD_ERROR degradation pattern as ETA.
+- `backend/app/config.py`: added `weather_stop_*`, `machine_fault_hold_s`, `idle_dev_*`, `idle_baseline_min_n`, `anomaly_threshold_pct`, `anomaly_min_train_rows`, `robust_z_threshold`.
+- `ml/tests/test_baselines.py` (4), `ml/tests/test_train_anomaly.py` (4), `ml/tests/test_evaluate.py` (4), `backend/tests/unit/test_attribution.py` (13), `backend/tests/unit/test_anomaly_service.py` (9).
+- `Makefile`: `baselines`, `train-anomaly`, `evaluate`, and composite `train` (= gen-data → train-eta → baselines → train-anomaly → evaluate, matching `BUILD_PLAN_new.md` §7).
+
+**Real bug found and fixed:** `ml/baselines.py` originally produced **zero** entries at the `operator_context`/`skill_context`/`task_type` levels — only `global` populated. Root cause: idle-gap windows are generated with `task_type=""`, which `pandas.read_csv` reads back as `NaN`, and `pandas.groupby` **silently drops every row with NaN in a groupby key column by default**. Since every row used for these baselines is an idle window, 100% of the input got dropped at every non-global level. Fixed by filling `task_type` with a `"NONE"` sentinel before grouping. Caught by `test_all_levels_populated`, added specifically as a regression guard for this failure mode.
+
+**Documented design limitation (not a bug):** because idle-gap windows have no associated task, the `task_type` dimension of "context" (ARCH 6.6: `context = (task_type, weather, skill)`) degenerates to a single `"NONE"` bucket at the `task_type` backoff level — it isn't a genuine per-task-type baseline for idle time. The `operator_context` and `skill_context` levels (which also include `weather`) remain meaningfully discriminative. A future iteration could associate idle gaps with their *preceding* task's type instead.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+119 passed in 83.10s
+```
+(85 prior + 34 new.)
+
+**Manual verification / measured numbers — `ml/artifacts/metrics.json` on the real test split (2,945-task / 44,020-window full dataset), pasted verbatim:**
+
+*ETA (test, n=590 tasks):*
+| Metric | Value |
+|---|---|
+| Model P50 MAE | **4.75 sim-min** |
+| Planner-estimate MAE | 14.88 sim-min |
+| Relative improvement vs planner | **+68.1%** (BUILD_PLAN target was ≥30%) |
+| P10–P90 coverage | 74.4% (target ~80%; measured, not adjusted to hit the target) |
+
+*Anomaly (test, n=7,137 eligible windows, 204 positive):*
+| Method | Precision | Recall | F1 | PR-AUC |
+|---|---|---|---|---|
+| Isolation Forest | 0.120 | 0.132 | 0.126 | 0.111 |
+| Robust-z fallback | 0.156 | 0.598 | 0.248 | 0.123 |
+
+IF recall by injected type: `HIGH_FUEL_PER_CYCLE` 1.5%, `HOT_ENGINE` 10.9%, `ERRATIC_CYCLES` 26.8%.
+
+**This is a genuinely weak result for the primary model, reported honestly rather than adjusted.** Investigated rather than hidden: the false positives (198 of them) have a median `rpm_std` of 142.9, versus 66.7 for the eligible-window population overall — they are dominated by the one-per-machine-per-day shift-start transient (Batch 3A's physics continuity fix: state resets once per day, and that reset genuinely produces a statistically unusual window). This competes with the intentionally-injected anomaly types for the Isolation Forest's fixed 3% contamination budget, so the model correctly finds outliers, just not preferentially the ones with `is_anomaly=1` labels. The calibration itself is correct (3.15% of test windows flagged, matching the 0.97 threshold). Options for a future iteration: exclude the first window of each machine-day from training, or accept shift-start flagging as a legitimate (if unlabeled) anomaly. Not fixed in this batch — recorded as a known, root-caused limitation.
+
+*Attribution (test, n=1,423 idle windows):* primary-cause agreement **94.9%**. The confusion is concentrated in `WEATHER`: true-WEATHER windows are predicted WEATHER only 43% of the time (33/76), with SITE/OPERATOR splitting the rest. Root cause verified: the generator can choose the `WEATHER` gap cause with a small non-zero weight even on non-heavy-rain days (a modest 5–15 min stoppage), and on those days the window's `rainfall_mm_h`/`visibility_m`/`wind_kmh` don't cross the detection thresholds used by `classify_idle_frames` — so the window is physically indistinguishable from an `OPERATOR`/`SITE` window using only the signals the real attribution service has access to. This is a generator/evaluation-methodology characteristic (the ground-truth label encodes generator intent, not necessarily a detectable physical signal), not a classifier defect.
+
+**Architecture decisions / deviations:**
+- `evaluate_attribution()` re-derives the predicted cause from the window's own aggregate CSV columns (not by re-running `classify_idle_frames()` frame-by-frame, since the CSV doesn't retain per-frame arrays) — this tests the same priority *logic*, applied at window granularity.
+- `np.trapz` was removed in numpy 2.x (renamed `np.trapezoid`); `ml/evaluate.py`'s PR-AUC helper handles both.
+
+**Next:** Batch 3D (Warm worker + window processing), awaiting approval.

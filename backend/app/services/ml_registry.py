@@ -52,7 +52,12 @@ class ModelRegistry:
     eta_meta: dict | None = None
 
     anomaly_status: Status = "MISSING"
+    iforest_model: Any = None
+    iforest_meta: dict | None = None
+    window_stats: dict | None = None
+
     baselines_status: Status = "MISSING"
+    idle_baselines: dict | None = None
 
     _loaded: bool = False
 
@@ -61,7 +66,67 @@ class ModelRegistry:
             return
         self._loaded = True
         self._load_eta()
-        # anomaly_status / baselines_status are populated in Batch 3C.
+        self._load_anomaly()
+        self._load_baselines()
+
+    def _load_anomaly(self) -> None:
+        meta_path = os.path.join(self.artifacts_dir, "iforest_meta.json")
+        model_path = os.path.join(self.artifacts_dir, "iforest.joblib")
+        stats_path = os.path.join(self.artifacts_dir, "window_stats.json")
+
+        # window_stats.json (robust-z fallback) is independent of the IF
+        # model itself — load it even if the model is missing/broken.
+        if os.path.exists(stats_path):
+            try:
+                with open(stats_path) as f:
+                    self.window_stats = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to read window_stats.json: {e}")
+
+        if not (os.path.exists(meta_path) and os.path.exists(model_path)):
+            self.anomaly_status = "MISSING"
+            return
+
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to read iforest_meta.json: {e}")
+            self.anomaly_status = "LOAD_ERROR"
+            return
+
+        installed = _installed_lib_versions()
+        trained = meta.get("lib_versions", {})
+        trained_sklearn = trained.get("sklearn")
+        if trained_sklearn and _major_minor(trained_sklearn) != _major_minor(installed.get("sklearn", "")):
+            logger.warning(
+                f"iforest trained with sklearn=={trained_sklearn}, installed sklearn=={installed.get('sklearn')}"
+            )
+            self.anomaly_status = "VERSION_MISMATCH"
+            self.iforest_meta = meta
+            return
+
+        try:
+            import joblib
+            self.iforest_model = joblib.load(model_path)
+            self.iforest_meta = meta
+            self.anomaly_status = "READY"
+        except Exception as e:
+            logger.error(f"Failed to load iforest.joblib: {e}")
+            self.anomaly_status = "LOAD_ERROR"
+
+    def _load_baselines(self) -> None:
+        path = os.path.join(self.artifacts_dir, "idle_baselines.json")
+        if not os.path.exists(path):
+            self.baselines_status = "MISSING"
+            return
+        try:
+            with open(path) as f:
+                self.idle_baselines = json.load(f)
+            self.baselines_status = "READY"
+        except Exception as e:
+            logger.error(f"Failed to load idle_baselines.json: {e}")
+            self.baselines_status = "LOAD_ERROR"
 
     def _load_eta(self) -> None:
         meta_path = os.path.join(self.artifacts_dir, "eta_meta.json")

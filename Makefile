@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train
 
 up:
 	docker-compose up -d
@@ -39,3 +39,15 @@ test-ml:
 
 train-eta:
 	PYTHONPATH=. venv/bin/python -m ml.train_eta --data ml/data --out ml/artifacts --seed 42
+
+baselines:
+	PYTHONPATH=. venv/bin/python -m ml.baselines --data ml/data --out ml/artifacts
+
+train-anomaly:
+	PYTHONPATH=. venv/bin/python -m ml.train_anomaly --data ml/data --out ml/artifacts --seed 42
+
+evaluate:
+	PYTHONPATH=. venv/bin/python -m ml.evaluate --data ml/data --artifacts ml/artifacts
+
+# Full pipeline per BUILD_PLAN_new.md section 7: generate -> train -> evaluate.
+train: gen-data train-eta baselines train-anomaly evaluate

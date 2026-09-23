@@ -1,0 +1,92 @@
+{
+  "eta": {
+    "split": "test",
+    "n": 590,
+    "data": "synthetic",
+    "mae_model_p50_min": 4.753,
+    "mae_planner_estimate_min": 14.875,
+    "relative_improvement_vs_planner": 0.6805,
+    "p10_p90_coverage": 0.7441,
+    "mae_by_task_type_min": {
+      "BULK_EXCAVATION": 5.079,
+      "GRADING": 5.148,
+      "STOCKPILE_MGMT": 4.691,
+      "TRENCHING": 5.183,
+      "TRUCK_LOADING": 4.188
+    }
+  },
+  "anomaly": {
+    "split": "test",
+    "n": 7137,
+    "data": "synthetic",
+    "n_positive": 204,
+    "isolation_forest": {
+      "precision": 0.12,
+      "recall": 0.1324,
+      "f1": 0.1259,
+      "tp": 27,
+      "fp": 198,
+      "fn": 177,
+      "pr_auc": 0.1107,
+      "threshold_pct": 0.97,
+      "recall_by_anomaly_type": {
+        "HIGH_FUEL_PER_CYCLE": 0.0145,
+        "HOT_ENGINE": 0.1094,
+        "ERRATIC_CYCLES": 0.2676
+      }
+    },
+    "robust_z_fallback": {
+      "precision": 0.156,
+      "recall": 0.598,
+      "f1": 0.2475,
+      "tp": 122,
+      "fp": 660,
+      "fn": 82,
+      "pr_auc": 0.1228,
+      "threshold": 3.5
+    }
+  },
+  "attribution": {
+    "split": "test",
+    "n": 1423,
+    "data": "synthetic",
+    "primary_cause_agreement": 0.9487,
+    "confusion_matrix": {
+      "MACHINE": {
+        "MACHINE": 84,
+        "OPERATOR": 0,
+        "PLANNED": 0,
+        "SITE": 0,
+        "WEATHER": 0
+      },
+      "OPERATOR": {
+        "MACHINE": 0,
+        "OPERATOR": 257,
+        "PLANNED": 0,
+        "SITE": 0,
+        "WEATHER": 31
+      },
+      "PLANNED": {
+        "MACHINE": 0,
+        "OPERATOR": 0,
+        "PLANNED": 432,
+        "SITE": 0,
+        "WEATHER": 0
+      },
+      "SITE": {
+        "MACHINE": 0,
+        "OPERATOR": 0,
+        "PLANNED": 0,
+        "SITE": 544,
+        "WEATHER": 0
+      },
+      "WEATHER": {
+        "MACHINE": 0,
+        "OPERATOR": 14,
+        "PLANNED": 0,
+        "SITE": 28,
+        "WEATHER": 33
+      }
+    }
+  }
+}
