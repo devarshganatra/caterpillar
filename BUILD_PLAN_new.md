@@ -16,32 +16,6 @@ Companion to `ARCHITECTURE.md`. Aim high in the architecture, ship an MVP in the
 
 ---
 
-## 1b. AI Layer Build Strategy
-
-> **Decision (locked):** Build Gemini API-direct first. Add LangGraph agentic layer only if time permits in the final morning hours.
-
-### Why this order:
-- Gemini-direct gives a **guaranteed working demo** — incident explanations, micro-lessons, shift summaries all functional.
-- LangGraph agents are **built on top of** Gemini tool calls — the upgrade path reuses all existing logic.
-- In a 24h hackathon, agent loop debugging is a time sink. Don't build the roof before the walls.
-
-### The one rule to make the upgrade easy later:
-**ALL Gemini API calls MUST go through `backend/app/genai/client.py` only.**
-- No scattered `genai.generate_content()` calls in other files.
-- Expose clean functions: `explain_incident(ctx)`, `generate_lesson(ctx)`, `summarize_shift(ctx)`.
-- When/if upgrading to LangGraph: swap the internals of `client.py`, wrap existing calls as LangGraph tools, add a StateGraph — nothing else changes.
-
-### LangGraph upgrade (morning stretch goal, P1):
-- Existing Gemini tool functions → LangGraph `@tool` definitions
-- Add `StateGraph` with nodes: `reason → select_tool → execute → validate → respond`
-- The agent gets: enriched context (machine state, alerts, operator profile, env conditions)
-- Produces richer: multi-step incident analysis, adaptive lesson sequencing, proactive operator coaching
-
-### Judge answer if asked "why not agents from the start?":
-> "We separated concerns intentionally. Safety runs on a deterministic hot path — no LLM in the loop. The intelligence layer uses structured Gemini calls now, with a documented upgrade path to LangGraph that reuses all existing tool logic."
-
----
-
 ## 2. Team roles
 
 | Member | Owns |
