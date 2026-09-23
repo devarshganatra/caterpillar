@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 120
     sim_speed: int = 10
     log_level: str = "INFO"
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     # Warm worker (Stage 3 Batch 3D)
     warm_window_seconds: int = 30

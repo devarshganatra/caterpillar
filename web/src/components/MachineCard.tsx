@@ -1,100 +1,15 @@
-import { useEffect, useState, useRef } from 'react';
-import { apiFetch } from '../lib/api';
-import { SignalHigh, SignalZero, ShieldAlert } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { SignalHigh, SignalZero, ShieldAlert, AlertOctagon } from 'lucide-react';
 import { cn } from '../lib/utils';
-import type { UiPush } from '../store/MachineContext';
+import { useMachineStream } from '../store/useMachineStream';
+import { AnomalyBadge } from './intel/AnomalyBadge';
+import { EtaChip } from './intel/EtaChip';
 
 export function MachineCard({ machineId, initialTask }: { machineId: string, initialTask: any }) {
-  const [status, setStatus] = useState<'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'STALE'>('DISCONNECTED');
-  const [currentState, setCurrentState] = useState('UNKNOWN');
-  const [riskLevel, setRiskLevel] = useState('NORMAL');
-  const [alerts, setAlerts] = useState<any[]>([]);
+  const { status, currentState, riskLevel, alerts, eta, anomaly, openIncidents } = useMachineStream(machineId);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const lastEventTsRef = useRef<number>(0);
-  const staleIntervalRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    staleIntervalRef.current = window.setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN && lastEventTsRef.current > 0) {
-        if (Date.now() - lastEventTsRef.current > 10000) {
-          setStatus(prev => prev === 'CONNECTED' ? 'STALE' : prev);
-        }
-      }
-    }, 1000);
-    return () => clearInterval(staleIntervalRef.current!);
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: number;
-
-    async function connect() {
-      if (!isMounted) return;
-      try {
-        setStatus('CONNECTING');
-        const res = await apiFetch("/auth/ws-ticket", { method: "POST" });
-        if (!res.ok) throw new Error("Ticket failed");
-        const { ticket } = await res.json();
-        
-        ws = new WebSocket(`ws://localhost:8000/ws/stream/${machineId}?ticket=${ticket}`);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (!isMounted) return;
-          setStatus('CONNECTED');
-          lastEventTsRef.current = Date.now();
-        };
-
-        ws.onmessage = (event) => {
-          if (!isMounted) return;
-          lastEventTsRef.current = Date.now();
-          setStatus('CONNECTED');
-          
-          try {
-            const data: UiPush = JSON.parse(event.data);
-            if (data.type === 'state_change') setCurrentState(data.payload.state);
-            else if (data.type === 'risk') setRiskLevel(data.payload.level);
-            else if (data.type === 'alert') {
-              setAlerts(prev => {
-                const existing = prev.find(a => a.id === data.payload.id);
-                if (existing) return prev.map(a => a.id === data.payload.id ? data.payload : a);
-                return [...prev, data.payload].slice(-3);
-              });
-            } else if (data.type === 'alert_clear') {
-              setAlerts(prev => prev.filter(a => a.id !== data.payload.id));
-            }
-          } catch (e) {}
-        };
-
-        ws.onclose = () => {
-          if (!isMounted) return;
-          setStatus('DISCONNECTED');
-          reconnectTimeout = window.setTimeout(connect, 2000);
-        };
-      } catch (err) {
-        if (isMounted) {
-          setStatus('DISCONNECTED');
-          reconnectTimeout = window.setTimeout(connect, 2000);
-        }
-      }
-    }
-
-    connect();
-
-    return () => {
-      isMounted = false;
-      clearTimeout(reconnectTimeout);
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
-      }
-    };
-  }, [machineId]);
-
-  const riskColor = 
-    riskLevel === 'CRITICAL' || riskLevel === 'HIGH' ? 'border-destructive bg-destructive/10 text-destructive' :
+  const riskColor =
+    riskLevel === 'CRITICAL' || riskLevel === 'HIGH' ? 'border-status-critical bg-status-critical/10 text-status-critical' :
     riskLevel === 'ELEVATED' ? 'border-status-warning bg-status-warning/10 text-status-warning' :
     'border-status-normal bg-status-normal/10 text-status-normal';
 
@@ -107,17 +22,22 @@ export function MachineCard({ machineId, initialTask }: { machineId: string, ini
           <h3 className="text-xl font-bold font-mono">{machineId}</h3>
           <p className="text-xs uppercase opacity-80 mt-1">{currentState}</p>
         </div>
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-end gap-1.5">
           <div className="text-sm font-bold">{riskLevel}</div>
           {isLive ? <SignalHigh className="w-4 h-4 opacity-70" /> : <SignalZero className="w-4 h-4 opacity-70 animate-pulse" />}
         </div>
       </div>
 
-      <div className="space-y-2 mt-4 min-h-[60px]">
+      <div className="flex items-center justify-between mb-3">
+        <EtaChip eta={eta} compact />
+        <AnomalyBadge anomaly={anomaly} />
+      </div>
+
+      <div className="space-y-2 mt-2 min-h-[44px]">
         {alerts.length > 0 ? (
-          alerts.map((a, i) => (
-            <div key={i} className="text-xs flex items-center gap-2">
-              <ShieldAlert className="w-3 h-3" />
+          alerts.map((a) => (
+            <div key={a.event_id} className="text-xs flex items-center gap-2">
+              <ShieldAlert className="w-3 h-3 shrink-0" />
               <span className="truncate">{a.type}</span>
             </div>
           ))
@@ -125,9 +45,20 @@ export function MachineCard({ machineId, initialTask }: { machineId: string, ini
           <div className="text-xs opacity-50 italic">No active alerts</div>
         )}
       </div>
-      
-      <div className="mt-4 pt-4 border-t border-border/20 text-xs opacity-60">
-        Task: {initialTask.id} • Operator: {initialTask.operator_id.split('-')[0]}
+
+      <div className="mt-4 pt-4 border-t border-border/20 flex items-center justify-between text-xs opacity-80">
+        <span>
+          Task: {initialTask.id} &middot; Operator: {initialTask.operator_id.split('-')[0]}
+        </span>
+        {openIncidents.length > 0 && (
+          <Link
+            to={`/supervisor/incidents/${openIncidents[0].id}`}
+            className="flex items-center gap-1 font-semibold text-status-critical hover:underline shrink-0"
+          >
+            <AlertOctagon className="w-3.5 h-3.5" />
+            {openIncidents.length} open
+          </Link>
+        )}
       </div>
     </div>
   );

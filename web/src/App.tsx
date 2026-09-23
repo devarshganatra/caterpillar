@@ -2,12 +2,23 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './store/AuthContext';
 import { MachineProvider } from './store/MachineContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { useAuth } from './store/AuthContext';
 import { Login } from './views/Login';
 import { PreStart } from './views/PreStart';
 import { Hud } from './views/Hud';
 import { IdleHub } from './views/IdleHub';
 import { Supervisor } from './views/Supervisor';
 import { Admin } from './views/Admin';
+import { IncidentPage } from './views/IncidentPage';
+
+/** Sends a signed-in user to their role's home; unauthenticated -> login. */
+function RoleHome() {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'OPERATOR') return <Navigate to="/operator/prestart" replace />;
+  if (user.role === 'SUPERVISOR') return <Navigate to="/supervisor" replace />;
+  return <Navigate to="/admin" replace />;
+}
 
 function App() {
   return (
@@ -35,8 +46,13 @@ function App() {
               <Route path="/admin" element={<Admin />} />
             </Route>
 
+            {/* Incident detail — reachable by both supervisors and admins */}
+            <Route element={<ProtectedRoute allowedRoles={['SUPERVISOR', 'ADMIN']} />}>
+              <Route path="/supervisor/incidents/:incidentId" element={<IncidentPage />} />
+            </Route>
+
             {/* Catch-all */}
-            <Route path="/" element={<ProtectedRoute />} />
+            <Route path="/" element={<RoleHome />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

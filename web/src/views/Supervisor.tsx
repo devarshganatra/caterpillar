@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiFetch } from '../lib/api';
 import { MachineCard } from '../components/MachineCard';
+import { IncidentList } from '../components/incidents/IncidentList';
 import { AlertTriangle, MapPin } from 'lucide-react';
 
 export function Supervisor() {
@@ -78,20 +79,26 @@ export function Supervisor() {
         <div className="glass-card p-8 border-destructive/50 bg-destructive/10 text-destructive flex items-center gap-3">
           <AlertTriangle /> {error}
         </div>
-      ) : loading ? (
-        <div className="glass-card p-8 flex justify-center text-muted-foreground">Loading fleet data...</div>
-      ) : uniqueMachines.length === 0 ? (
-        <div className="glass-card p-12 text-center flex flex-col items-center">
-          <MapPin className="w-12 h-12 text-muted-foreground opacity-50 mb-4" />
-          <h3 className="text-xl font-semibold">No Machines Active</h3>
-          <p className="text-muted-foreground mt-2">There are no tasks assigned at {selectedSite} today.</p>
-        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {uniqueMachines.map(machineId => {
-            const mTask = tasks.find(t => t.machine_id === machineId);
-            return <MachineCard key={machineId} machineId={machineId} initialTask={mTask} />;
-          })}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8 items-start">
+          {loading ? (
+            <div className="glass-card p-8 flex justify-center text-muted-foreground">Loading fleet data...</div>
+          ) : uniqueMachines.length === 0 ? (
+            <div className="glass-card p-12 text-center flex flex-col items-center">
+              <MapPin className="w-12 h-12 text-muted-foreground opacity-50 mb-4" />
+              <h3 className="text-xl font-semibold">No Machines Active</h3>
+              <p className="text-muted-foreground mt-2">There are no tasks assigned at {selectedSite} today.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {uniqueMachines.map(machineId => {
+                const mTask = tasks.find(t => t.machine_id === machineId);
+                return <MachineCard key={machineId} machineId={machineId} initialTask={mTask} />;
+              })}
+            </div>
+          )}
+
+          <IncidentList siteId={selectedSite} />
         </div>
       )}
     </div>

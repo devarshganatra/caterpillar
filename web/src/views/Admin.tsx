@@ -1,11 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../lib/api';
-import { ShieldCheck, ShieldAlert, Activity } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Activity, Server, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { relativeTime } from '../lib/format';
+import type { WorkerStatus } from '../lib/types';
+
+const WORKER_ORDER = ['hot', 'warm', 'correlator', 'cold'];
 
 export function Admin() {
   const [verifyResult, setVerifyResult] = useState<{ valid: boolean, error?: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatus | null>(null);
+  const [workerError, setWorkerError] = useState<string | null>(null);
+
+  const loadWorkers = useCallback(async () => {
+    try {
+      const res = await apiFetch('/admin/workers');
+      if (!res.ok) throw new Error('Failed to load worker status');
+      setWorkerStatus(await res.json());
+      setWorkerError(null);
+    } catch (err: any) {
+      setWorkerError(err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWorkers();
+    const interval = window.setInterval(loadWorkers, 10000);
+    return () => window.clearInterval(interval);
+  }, [loadWorkers]);
 
   const handleVerify = async () => {
     setLoading(true);
@@ -26,6 +49,63 @@ export function Admin() {
       <div>
         <h1 className="text-3xl font-bold text-primary">Demo Director (Admin)</h1>
         <p className="text-muted-foreground mt-2">Manage the simulator and verify system integrity.</p>
+      </div>
+
+      <div className="glass-card p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-border pb-4">
+          <div className="flex items-center gap-3">
+            <Server className="text-primary w-5 h-5" />
+            <h2 className="text-xl font-semibold">Worker Status</h2>
+          </div>
+          <button
+            onClick={loadWorkers}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+
+        {workerError ? (
+          <p className="text-sm text-destructive">{workerError}</p>
+        ) : !workerStatus ? (
+          <p className="text-sm text-muted-foreground">Loading&hellip;</p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+            {WORKER_ORDER.map((name) => {
+              const info = workerStatus.workers[name];
+              const heartbeat = info?.last_ok_ts;
+              const alive = heartbeat ? Date.now() - new Date(heartbeat).getTime() < 20000 : false;
+              return (
+                <div key={name} className="rounded-lg border border-border/60 bg-background/30 p-3 flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className={cn("w-2 h-2 rounded-full shrink-0", alive ? "bg-status-normal intel-live-dot" : "bg-status-offline")} />
+                    <span className="text-sm font-semibold capitalize">{name}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {heartbeat ? relativeTime(heartbeat) : "No heartbeat"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {workerStatus && Object.keys(workerStatus.stream_lag).length > 0 && (
+          <div className="pt-4 border-t border-border/50">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground font-medium mb-2">
+              Stream lag
+            </div>
+            <div className="intel-scroll max-h-40 overflow-y-auto space-y-1">
+              {Object.entries(workerStatus.stream_lag).map(([key, v]) => (
+                <div key={key} className="flex items-center justify-between text-xs font-mono text-muted-foreground">
+                  <span className="truncate">{key}</span>
+                  <span className="intel-num shrink-0 ml-2">pending {v.pending} &middot; lag {v.lag}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

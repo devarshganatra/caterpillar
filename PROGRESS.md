@@ -576,3 +576,56 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/
 - `build_fallback()` raises `RuntimeError` if the packet's knowledge list is completely empty (impossible with the real 48-chunk knowledge base, but a real failure mode if the knowledge directory were ever misconfigured) — deliberately loud rather than silently constructing a schema-invalid `Lesson`, tested in `test_fallback_raises_clearly_when_knowledge_base_empty`.
 
 **Next:** Batch 3I (Frontend intelligence integration), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3I: Frontend intelligence integration  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** wire the ML/LLM intelligence layer (ETA, idle attribution, anomaly, incidents) into the React UI, reusing the app's existing dark/glass-card/CAT-yellow design language rather than a bolted-on new style, per the explicit brief: "very very good ui very smooth elegant impressive and shouldnt look like ai slop."
+
+**New shared hook — `web/src/store/useMachineStream.ts`:** the single source of truth for one machine's live state (connection lifecycle, snapshot hydration, WS push handling, stale watchdog, exponential-backoff reconnect), now shared by both `MachineContext` (the operator's own machine) and `MachineCard` (a supervisor's fleet grid), which previously had two independently-drifting WebSocket implementations. Fixes three real bugs that existed in the pre-3I frontend, none caught until this batch actually read the wire contract against the backend's real payloads:
+- **G6:** `Hud.tsx`/`IdleHub.tsx` navigated on `currentState === 'IDLE_HUB'`, a value the backend never sends — `state` and `ui_mode` are separate fields, and only `ui_mode` carries `IDLE_HUB`. The HUD ↔ Idle Hub transition was silently dead code before this batch.
+- **G7:** the old `MachineCard.tsx` read `risk` pushes with a `.level` field the hot worker never emits; risk level came from `state_change.payload.risk_level` all along.
+- **G11:** alert de-dupe/removal keyed on `alert.id`, which does not exist on the wire payload (`event_id` does) — every alert was being treated as new, and `alert_clear` never matched anything.
+
+**New design primitives (`web/src/index.css`):** `.intel-rise` (fade+slide entrance), `.intel-live-dot` (pulse ring), `.intel-bar-fill` (width transition), `.intel-num` (tabular-nums), `.intel-scroll` (thin scrollbar) — deliberately restrained, reusing existing status/primary color tokens rather than introducing a new palette.
+
+**New components:**
+- `web/src/components/intel/EtaChip.tsx` — compact HUD/fleet-card chip (P50 + P10–P90 band, slip indicator); now has a `compact` variant for the fleet grid.
+- `web/src/components/intel/EtaFactorBars.tsx` — SHAP-style diverging horizontal bars centered on a zero line (green = saves time, orange = adds time), staggered entrance animation.
+- `web/src/components/intel/EtaCard.tsx` — full Idle Hub ETA card (remaining P50/band, progress bar, factor bars, model version).
+- `web/src/components/intel/IdleAttributionCard.tsx` — self-polling (15s) stacked bar + legend over the 5 idle causes, deviation-flag warning banner. **Bug found and fixed:** an initial version built Tailwind classes as `` `${x}/15` `` template strings, which Tailwind's JIT scanner cannot see (it only scans literal source strings) and would have silently rendered unstyled; fixed by spelling out a static `badge` class per cause.
+- `web/src/components/intel/AnomalyBadge.tsx` — compact/expanded anomaly indicator with top-3 SHAP-style driver chips.
+- `web/src/components/incidents/IncidentList.tsx` — polls `GET /incidents?site_id=` every 10s (there is no site-wide WebSocket in this system — only per-machine `/ws/stream/{id}` — so polling is the correct mechanism here, not a workaround).
+- `web/src/components/incidents/IncidentDetail.tsx` — status pill, Ack/Close(note) actions (SUPERVISOR/ADMIN only, 409s surfaced), explanation block with a source badge (`Groq (grounded)` vs `Deterministic fallback` + reason), probable causes with evidence chips linking to timeline events, recommended actions and lesson with knowledge chips that fetch `/knowledge/chunks/{id}` on demand and expand inline on click, and an ordered timeline.
+- `web/src/views/IncidentPage.tsx` + route `/supervisor/incidents/:incidentId` (SUPERVISOR and ADMIN).
+- `web/src/lib/types.ts` (TS mirrors of the intelligence + incident contracts) and `web/src/lib/format.ts` (`fmtMinutes`, `fmtSignedMinutes`, `fmtPercent`, `fmtSeconds`, `titleCase`, `relativeTime`).
+
+**Rewired existing views:** `MachineCard.tsx` (now uses `useMachineStream` + `EtaChip`/`AnomalyBadge` + open-incident link), `Hud.tsx` (fixed G6 nav, real `EtaChip`, fixed `envelope.speed_cap` → `speed_cap_kmh` — another latent bug from before this batch), `IdleHub.tsx` (fixed G6 back-nav, real `EtaCard` + `IdleAttributionCard`), `Supervisor.tsx` (added `IncidentList` panel), `Admin.tsx` (added a live Worker Status panel from `/admin/workers`, polled every 10s), `App.tsx` (incident detail route).
+
+**Two more real bugs found and fixed while manually verifying against the live stack (neither is scoped to "frontend intelligence integration" but both blocked reaching any authenticated view at all, so both are fixed here rather than filed away):**
+1. **No CORS middleware on the backend at all** (`backend/app/main.py`) — every request from the Vite dev server (port 5173) to the API (port 8000) failed at the preflight `OPTIONS` step with a 405, so *no* frontend request of any kind could ever succeed against a separately-run API in local dev. Added `CORSMiddleware` with a new `settings.cors_origins` (defaults to the Vite dev origins).
+2. **`App.tsx`'s `/` catch-all rendered a bare `<ProtectedRoute />` with no nested route** — Login navigated to `/` after signing in and landed on a blank page for every role, since `Outlet` had nothing to render. Replaced with a `RoleHome` component that redirects to the correct role's home route.
+
+**Checks run:**
+```
+npm run build   # tsc -b && vite build — clean
+npm run lint    # oxlint — 0 errors, only pre-existing-pattern warnings (react-hooks/set-state-in-effect etc., same classes already present in AuthContext.tsx before this batch)
+```
+
+**Manual verification against the real stack** (docker db+redis, `uvicorn backend.app.main:app`, `npm run dev`, browser pane):
+- Logged in as `supervisor`/`demo123` → Fleet Supervisor renders live `MachineCard`s with working WS connection, compact `EtaChip`, and an "N open" incident link on the machine with a real open incident.
+- Clicked into `IncidentDetail` for a real `LDR001` `HEALTH_THRESHOLD` incident (fallback explanation, `NO_API_KEY`): probable causes, recommended actions, and lesson rendered with real evidence/knowledge chips; clicking a knowledge chip fetched and expanded the real chunk text (`adverse-weather-operation` doc) inline.
+- **Ack flow:** clicked Acknowledge → status pill flipped `OPEN → ACKNOWLEDGED`, a `STATUS`-kind timeline entry appeared ("Acknowledged by supervisor"), Ack button correctly disappeared.
+- **Close flow:** opened the close-note form, "Confirm close" correctly stayed disabled until text was entered, submitted a note → status flipped to `CLOSED`, both action buttons correctly disappeared (`canManage && status !== 'CLOSED'` gate), timeline updated, and `IncidentList` on the Supervisor page reflected `Closed` immediately on the next poll with the open-incident link removed from the fleet card.
+- Logged in as `admin`/`demo123` → Worker Status panel correctly showed `warm`/`cold` with real (if stale, from an earlier session) heartbeats and `hot`/`correlator` as "No heartbeat" (accurate — those two workers don't publish `worker:status` in the current backend).
+- Zero new console errors at any point (checked after every action).
+
+**Known limitations / deferred:**
+- The operator HUD → Idle Hub live-telemetry transition (30-tick dwell) was **not** manually driven end-to-end in this batch — the demo DB already had persisted sequence state for the seeded machines from earlier sessions, and re-running the simulator against it produced `409 Sequence out of order` without a state reset. The component wiring (uses `uiMode`, not the old broken `currentState` check) was fixed and code-reviewed, and both `EtaCard`/`IdleAttributionCard` were verified against real backend data via the Idle Hub route's props — but the live tick-by-tick transition itself is more appropriately Batch 3J's job (full end-to-end verification), which can reset/seed a clean machine for it.
+- `MachineCard`'s open-incident link points at `openIncidents[0]` (first only) when a machine has more than one open incident — acceptable for the fleet-grid glance view; the full list is one click away via `IncidentDetail`... via `IncidentList`, not yet a dedicated "all incidents for this machine" view.
+- No automated frontend test runner exists in this project (confirmed before starting; the plan explicitly said not to add one without approval) — verification here is `tsc`/`oxlint` + the manual pass above, not automated tests.
+
+**Next:** Batch 3J (Full end-to-end verification), awaiting approval.

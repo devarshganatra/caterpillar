@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import redis.asyncio as redis
 import logging
@@ -29,6 +30,16 @@ async def lifespan(app: FastAPI):
         await stream.redis_client.close()
 
 app = FastAPI(title="CAT Co-Pilot API", lifespan=lifespan)
+
+# The Vite dev server (5173) and the API (8000) are different origins;
+# without this every fetch from the frontend fails preflight.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
 app.include_router(ws_router, prefix="/ws", tags=["ws"])

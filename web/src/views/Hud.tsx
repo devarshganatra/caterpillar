@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMachine } from '../store/MachineContext';
-import { ShieldAlert, SignalHigh, SignalZero, Clock } from 'lucide-react';
+import { ShieldAlert, SignalHigh, SignalZero } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { ThreeDVis } from '../components/ThreeDVis';
+import { EtaChip } from '../components/intel/EtaChip';
 
 export function Hud() {
-  const { machineId, status, currentState, riskLevel, alerts, envelope } = useMachine();
+  const { machineId, status, currentState, uiMode, riskLevel, alerts, envelope, eta } = useMachine();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -16,10 +17,10 @@ export function Hud() {
   }, [machineId, navigate]);
 
   useEffect(() => {
-    if (currentState === 'IDLE_HUB') {
+    if (uiMode === 'IDLE_HUB') {
       navigate('/operator/idle');
     }
-  }, [currentState, navigate]);
+  }, [uiMode, navigate]);
 
   const isLive = status === 'CONNECTED';
   
@@ -50,11 +51,8 @@ export function Hud() {
           </div>
         </div>
 
-        {/* Right: Stubbed ETA */}
-        <div className="glass-card px-4 py-2 flex items-center gap-2 opacity-50">
-          <Clock className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm font-medium">ETA: Connecting...</span>
-        </div>
+        {/* Right: Live ETA */}
+        <EtaChip eta={eta} />
       </div>
 
       {/* Center 3D Vis Placeholder (Batch 5C.5) */}
@@ -71,8 +69,8 @@ export function Hud() {
             <div className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Active Envelope</div>
             {envelope ? (
               <div className="font-mono text-sm">
-                <div>Cap: {envelope.speed_cap} km/h</div>
-                <div className="text-xs text-muted-foreground">{envelope.notes}</div>
+                <div>Cap: {envelope.speed_cap_kmh} km/h</div>
+                {envelope.notes && <div className="text-xs text-muted-foreground">{envelope.notes}</div>}
               </div>
             ) : (
               <div className="text-sm text-muted-foreground italic">No restrictions</div>
@@ -83,8 +81,8 @@ export function Hud() {
         {/* Center: Alerts Zone */}
         <div className="space-y-3 flex flex-col justify-end min-h-[120px]">
           {alerts.map((alert, idx) => (
-            <div 
-              key={alert.id || idx} 
+            <div
+              key={alert.event_id || idx}
               className={cn(
                 "glass-card p-3 flex items-center gap-3 animate-in slide-in-from-bottom-2",
                 alert.severity === 'CRITICAL' ? 'border-destructive bg-destructive/10' :
