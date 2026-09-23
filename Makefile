@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml
 
 up:
 	docker-compose up -d
@@ -21,3 +21,18 @@ test:
 reset:
 	docker-compose down -v
 	docker-compose up -d
+
+# Stage 3 / Batch 3A — synthetic historical dataset generation.
+# "full" (60 days, ~50k windows) is what ml/artifacts/ models are trained on;
+# "dev"/"tiny" are faster profiles for local iteration (see ml/generate_history.py PROFILES).
+gen-data:
+	PYTHONPATH=. venv/bin/python -m ml.generate_history --profile full --seed 42 --out ml/data
+
+gen-data-dev:
+	PYTHONPATH=. venv/bin/python -m ml.generate_history --profile dev --seed 42 --out ml/data
+
+gen-data-tiny:
+	PYTHONPATH=. venv/bin/python -m ml.generate_history --profile tiny --seed 42 --out ml/data
+
+test-ml:
+	PYTHONPATH=. venv/bin/python -m pytest ml/tests/ -v

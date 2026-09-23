@@ -186,3 +186,52 @@ PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ -q
 - Fixed `simulator/scenarios/demo.yaml`'s incomplete `context:` block for the same reason.
 
 **Next:** Batch 3A (Historical data + ML foundations), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3A: Historical data + ML foundations  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** a deterministic synthetic historical dataset (tasks + 300s window aggregates + weather/ground/site/queue + operator skill + ~3% injected anomalies), a shared feature module used by both training and serving, and a time-based train/val/test split — no models trained yet (that's 3B/3C).
+
+**New files:**
+- `ml/constants.py` — single source of truth for task types, duration multipliers, feature lists, factor groups. **Assumption flagged:** `GROUND_M` (ground-condition duration multiplier) is not specified in BUILD_PLAN/ARCH (which only treats ground as a safety-envelope condition, not a duration multiplier) — used `{DRY:1.0, WET:1.06, MUDDY:1.15, ICY:1.25}`.
+- `ml/features.py` — `compute_window_features()` (pure numpy, no pandas — this will run inside the warm worker's hot loop in Batch 3D), `robust_z()`, `eta_feature_row()`/`encode_eta_row()`/`eta_feature_columns()` (used by Batch 3B).
+- `ml/sim_physics.py` — numpy re-implementation of `simulator/sim.py::advance_state`'s per-tick physics (target-based EMA + Gaussian noise), used to generate frame-level telemetry for history without depending on the async/httpx-based real simulator. Supports anomaly injection (`fuel_multiplier`, `cycle_duration_range`, `target_temp_override`) and physical-state threading across window calls (`init_state`/return `final_state`) so state is continuous across a shift, not reset every 300 frames.
+- `ml/generate_history.py` — day-by-day generator: per machine, a timeline of tasks (WORKING windows, duration via the BUILD_PLAN formula `base_min × weather_m × ground_m × skill_m × (1+0.03·age) × lognormal(0,0.08) + queue_delay`) separated by idle gaps whose physical signals (truck presence, queue length, forced machine fault, weather) are constructed to directly satisfy the Batch 3C attribution priority rule — the generator IS the ground truth for idle-cause accuracy evaluation. ~3% of eligible WORKING windows get one of `HIGH_FUEL_PER_CYCLE` / `ERRATIC_CYCLES` / `HOT_ENGINE` injected.
+- `ml/requirements-train.txt` — exact pinned versions from this venv, for training on a different machine (e.g. Colab) without artifact-loading skew.
+- `ml/tests/test_features.py` (11), `ml/tests/test_generate_history.py` (9), `ml/tests/test_sim_parity.py` (3).
+- `Makefile`: `gen-data` / `gen-data-dev` / `gen-data-tiny` / `test-ml` targets.
+
+**Two real bugs found and fixed by `test_sim_parity.py` (the train/serve-skew guard) before this batch was considered done:**
+1. **Physical-state reset per window.** Every window originally started `simulate_window` at rpm=0/hyd=0/fuel=0, so EVERY 300-frame window included a spin-up transient — not just the first window of a shift. This inflated `rpm_std` by ~3x versus real continuously-running telemetry (real ≈68.8 via the AR(1) steady-state formula, generator was giving 190–250). Fixed by threading physical state (`init_state`/`final_state`) across windows within a machine's day, resetting only once per machine per day (shift start).
+2. **Exponential fuel blowup in anomaly injection.** `fuel_multiplier` (used for the `HIGH_FUEL_PER_CYCLE` anomaly) was applied to the *persistent* EMA state every frame instead of only the reported reading, compounding to `1.6^300 ≈ 10^93` over a window (`fuel_per_cycle` max was `1.97e+93`). Fixed by multiplying only the per-frame output value, never feeding the multiplied value back into the carried state. Added `test_fuel_multiplier_does_not_compound_across_frames` as a regression guard. Post-fix: `HIGH_FUEL_PER_CYCLE` windows have `fuel_per_cycle` mean 0.60 vs normal-window mean 0.38 (the intended ~1.6x), no outliers.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ -q
+66 passed in 29.34s
+```
+(43 from Batch 3.0 + prior + 23 new: 11 features, 9 generator, 3 sim-parity — note test counts shifted slightly as the parity test file grew during the bug fixes above.)
+
+**Manual verification / measured numbers (from `ml/data/manifest.json`, not estimated):**
+| Profile | Days | Tasks | Windows | Generation time (this M1, base 8GB) |
+|---|---|---|---|---|
+| tiny | 3 | 139 | 2,133 | 2.6s |
+| dev | 15 | 706 | 10,844 | 12.9s |
+| **full** | **60** | **2,945** | **44,020** | **53.0s** |
+
+Anomaly rate by split (full profile): train 2.55%, val 2.59%, test 2.33% — close to the ~3% target (BUILD_PLAN's own figure is approximate). Task count for "full" (2,945) came in lower than BUILD_PLAN's illustrative "~5,000" because the day-length cap (9h shift) limits how many ~14-task-per-day machine-days fit; this is the generator's own physically-grounded number, not forced to match the brief's figure — recorded here rather than overridden.
+
+`ml/data/` (3.2MB, regenerable) is gitignored per the plan; `ml/artifacts/` is tracked (currently empty, `.gitkeep` only — Batch 3B/3C write model files there).
+
+**Simplifications versus the fully-detailed plan (documented, not silently done):**
+- Weather/ground context is drawn once per (site, day), not on an hourly Markov chain as ARCH §6 implies for live context — a coarser but still-varied and deterministic approximation, adequate for day-granularity WEATHER-cause attribution thresholds (rainfall/visibility/wind) in Batch 3C.
+- Idle gaps are single-cause per window (not a fractional mix within one window) — this was a deliberate design choice (see "Architecture decisions" below), not a simplification forced by time pressure.
+
+**Architecture decisions / deviations:**
+- Each idle window's physical signals (truck presence, queue length, forced fault, weather) are constructed to encode exactly ONE idle cause per window, chosen by the generator itself via a cause-weighted draw. This makes the dataset simultaneously the training data AND the ground-truth labels for Batch 3C's idle-attribution accuracy evaluation, without a separate hand-labelling step. Trade-off: real idle periods can plausibly have mixed causes within one window; this generator does not model that.
+- `PLANNED` break is inserted once per machine per day at a fixed elapsed time (4h in), not tied to a specific wall-clock time window — simpler than a global 12:00–12:30 UTC window while still being deterministic and evenly distributed.
+
+**Next:** Batch 3B (ETA prediction + explainability + live blending), awaiting approval.

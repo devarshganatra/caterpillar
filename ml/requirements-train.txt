@@ -1,0 +1,19 @@
+# Pinned to the exact versions installed in this project's venv (2026-09-24).
+# Use this file when training on a different machine (e.g. Google Colab) to
+# avoid artifact-loading skew: joblib-pickled models (Isolation Forest, in
+# Batch 3C) only load reliably against the scikit-learn version that trained
+# them. XGBoost's JSON model files are portable across versions, but keep
+# these pinned anyway for full reproducibility of ml/artifacts/*.
+xgboost==3.4.1
+scikit-learn==1.9.1
+shap==0.52.0
+numpy==2.5.3
+pandas==3.0.6
+joblib==1.6.0
+
+# --- Colab quickstart ---
+# 1. Upload/clone this repo (or just the ml/ and contracts/ directories).
+# 2. pip install -r ml/requirements-train.txt
+# 3. PYTHONPATH=. python -m ml.generate_history --profile full --seed 42 --out ml/data
+# 4. PYTHONPATH=. python -m ml.train_eta / train_anomaly / evaluate (added in Batch 3B/3C)
+# 5. Download ml/artifacts/ back into your local repo at the same path.
