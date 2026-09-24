@@ -222,3 +222,37 @@ export interface WorkerStatus {
   workers: Record<string, Record<string, string>>;
   stream_lag: Record<string, { pending: number; lag: number; entries_read: number }>;
 }
+
+// Stage 4A-4C: operator training lessons generated from incidents.
+export interface LessonSummary {
+  id: string;
+  incident_id: string;
+  machine_id: string;
+  operator_id: string | null;
+  title: string;
+  short_tip: string;
+  source: "GROQ" | "FALLBACK";
+  status: "READY" | "FALLBACK" | "FAILED";
+  generated_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+}
+
+export interface LessonDetail extends LessonSummary {
+  explanation: string;
+  knowledge_refs: string[];
+  fallback_reason: string | null;
+}
+
+// Payload shape of the lesson_ready UiPush — full content is pushed
+// directly so the player doesn't need a second round trip on delivery.
+export interface LessonPush {
+  lesson_id: string;
+  incident_id: string;
+  title: string;
+  short_tip: string;
+  explanation: string;
+  knowledge_refs: string[];
+  source: "GROQ" | "FALLBACK";
+  status: "READY" | "FALLBACK" | "FAILED";
+}

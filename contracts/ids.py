@@ -70,3 +70,9 @@ def window_id(machine_id: str, ts_epoch_s: float, window_s: int) -> str:
     """
     window_start = int(ts_epoch_s // window_s) * window_s
     return f"{machine_id}:{window_start}"
+
+
+def lesson_id(incident_id_: str) -> str:
+    """Deterministic lesson id — one lesson per incident, safe to regenerate."""
+    name = f"lesson:{incident_id_}"
+    return str(uuid.uuid5(NS, name))

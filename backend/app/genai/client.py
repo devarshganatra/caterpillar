@@ -21,12 +21,11 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
-
 from groq import AsyncGroq
 
 from backend.app.config import settings
 from backend.app.genai.schemas import llm_json_schema
+from backend.app.genai.lesson_schemas import lesson_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +49,10 @@ def _get_client() -> AsyncGroq:
     return _client
 
 
-async def generate_explanation(system: str, user: str) -> tuple[dict, dict]:
+async def _structured_completion(system: str, user: str, schema: dict, schema_name: str) -> tuple[dict, dict]:
     """
-    Calls the LLM with a JSON-schema-constrained structured output request.
+    Shared call path for every JSON-schema-constrained structured output
+    request this project makes (incident explanations, Stage 4 lessons).
     Returns (parsed_json_dict, meta) where meta = {model, latency_ms, usage}.
     Never logs the API key or the full prompt — only the packet hash (the
     caller's responsibility) and this call's outcome.
@@ -73,7 +73,7 @@ async def generate_explanation(system: str, user: str) -> tuple[dict, dict]:
                 ],
                 response_format={
                     "type": "json_schema",
-                    "json_schema": {"name": "incident_explanation", "schema": llm_json_schema(), "strict": True},
+                    "json_schema": {"name": schema_name, "schema": schema, "strict": True},
                 },
                 temperature=settings.groq_temperature,
             ),
@@ -105,11 +105,11 @@ async def generate_explanation(system: str, user: str) -> tuple[dict, dict]:
     return parsed, meta
 
 
-# --- Stage 4 stubs (out of scope for Stage 3) ---------------------------
+async def generate_explanation(system: str, user: str) -> tuple[dict, dict]:
+    """Calls the LLM for an incident explanation (see schemas.py)."""
+    return await _structured_completion(system, user, llm_json_schema(), "incident_explanation")
 
-async def generate_lesson(incident_id: str, operator_id: str) -> dict[str, Any]:
-    pass
 
-
-async def summarize_shift(operator_id: str, shift_id: str) -> dict[str, Any]:
-    pass
+async def generate_lesson_content(system: str, user: str) -> tuple[dict, dict]:
+    """Calls the LLM for a Stage 4 operator lesson (see lesson_schemas.py)."""
+    return await _structured_completion(system, user, lesson_json_schema(), "operator_lesson")

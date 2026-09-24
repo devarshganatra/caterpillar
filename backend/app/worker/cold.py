@@ -28,15 +28,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import settings
 from backend.app.db.session import AsyncSessionLocal
-from backend.app.db.models import IncidentRow, IncidentTimeline, IncidentExplanationRow
-from backend.app.genai.client import generate_explanation, LLMUnavailable
+from backend.app.db.models import IncidentRow, IncidentTimeline, IncidentExplanationRow, LessonRow
+from backend.app.genai.client import generate_explanation, generate_lesson_content, LLMUnavailable
 from backend.app.genai.fallback import build_fallback
+from backend.app.genai.lesson_fallback import build_lesson_fallback
+from backend.app.genai.lesson_prompts import (
+    LESSON_SYSTEM_PROMPT, build_lesson_user_prompt, build_lesson_retry_prompt,
+)
+from backend.app.genai.lesson_schemas import LessonLLM
+from backend.app.genai.lesson_validator import parse_and_validate_lesson
 from backend.app.genai.packet import build_incident_packet, packet_hash
 from backend.app.genai.prompts import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt, build_retry_prompt
 from backend.app.genai.schemas import IncidentExplanationLLM
 from backend.app.genai.validator import parse_and_validate
 from backend.app.knowledge.retriever import KnowledgeRetriever
 from contracts.events import UiPush, UiPushType
+from contracts.ids import lesson_id as make_lesson_id
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +90,7 @@ class ColdWorker:
 
                 latency_ms = round((time.monotonic() - t0) * 1000)
                 await self._persist(session, iid, h, output, source, fallback_reason, grounding, latency_ms)
+                await self._maybe_generate_lesson(session, iid, packet)
                 await session.commit()
         except Exception as e:
             logger.error(f"cold: unexpected error processing incident_id={incident_id}: {type(e).__name__}: {e}")
@@ -156,6 +164,67 @@ class ColdWorker:
             event_type=None, severity=None, first_ts=now, last_ts=now, count=1,
             representative_event_id=None, summary=summary_text, actor_id=None,
         ).on_conflict_do_nothing())
+
+    async def _maybe_generate_lesson(self, session: AsyncSession, incident_id: uuid.UUID, packet: dict) -> None:
+        """
+        Stage 4A: one lesson per incident, for the operator who was running
+        the machine. Best-effort by design — a lesson-generation failure
+        must never break the incident explanation flow above it, so every
+        exception here is caught and logged, never raised. Skipped when the
+        incident has no assigned operator (nothing to deliver it to) or a
+        lesson for this incident already exists (lesson id is deterministic,
+        so this is also what makes re-processing an incident safe).
+        """
+        operator_id = packet.get("operator_id")
+        if not operator_id:
+            return
+        try:
+            lid = uuid.UUID(make_lesson_id(str(incident_id)))
+            existing = await session.execute(select(LessonRow.id).where(LessonRow.id == lid))
+            if existing.scalar_one_or_none() is not None:
+                return
+
+            output, source, fallback_reason = await self._get_lesson(packet)
+            await self._persist_lesson(session, lid, incident_id, packet, output, source, fallback_reason)
+        except Exception as e:
+            logger.error(f"cold: lesson generation failed for incident_id={incident_id}: {type(e).__name__}: {e}")
+
+    async def _get_lesson(self, packet: dict) -> tuple[LessonLLM, str, str | None]:
+        """Returns (LessonLLM, source, fallback_reason). Mirrors
+        _get_explanation's retry-once-then-fallback policy exactly."""
+        if not settings.groq_api_key:
+            return build_lesson_fallback(packet), "FALLBACK", "NO_API_KEY"
+
+        violations: list[str] = []
+        user_prompt = build_lesson_user_prompt(packet)
+
+        for _ in range(settings.groq_max_retries + 1):
+            try:
+                raw, _meta = await generate_lesson_content(LESSON_SYSTEM_PROMPT, user_prompt)
+            except LLMUnavailable as e:
+                return build_lesson_fallback(packet), "FALLBACK", e.reason
+
+            parsed, violations = parse_and_validate_lesson(raw, packet)
+            if parsed is not None:
+                return parsed, "GROQ", None
+
+            user_prompt = build_lesson_retry_prompt(packet, violations)
+
+        return build_lesson_fallback(packet), "FALLBACK", "GROUNDING_INVALID"
+
+    async def _persist_lesson(self, session: AsyncSession, lesson_id_: uuid.UUID, incident_id: uuid.UUID,
+                               packet: dict, output: LessonLLM, source: str, fallback_reason: str | None) -> None:
+        stmt = pg_insert(LessonRow).values(
+            id=lesson_id_, incident_id=incident_id, machine_id=packet["incident"]["machine_id"],
+            operator_id=packet.get("operator_id"), title=output.title, short_tip=output.short_tip,
+            explanation=output.explanation, knowledge_refs=output.knowledge_refs, source=source,
+            status="READY" if source == "GROQ" else "FALLBACK", fallback_reason=fallback_reason,
+        ).on_conflict_do_nothing(index_elements=["id"])
+        await session.execute(stmt)
+        logger.info(json.dumps({
+            "service": "cold", "component": "lesson", "incident_id": str(incident_id),
+            "lesson_id": str(lesson_id_), "source": source, "fallback_reason": fallback_reason,
+        }))
 
     async def _emergency_fallback(self, incident_id: str, reason: str, error_detail: str) -> str:
         """

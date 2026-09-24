@@ -10,9 +10,11 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
+from sqlalchemy import select
+
 from backend.app.config import settings
 from backend.app.db.session import AsyncSessionLocal
-from backend.app.db.models import Event as DBEvent, MachineStateLog
+from backend.app.db.models import Event as DBEvent, MachineStateLog, LessonRow
 from backend.app.services.stream import parse_flat_context
 from contracts.events import (
     TelemetryFrame, ContextFrame, MachineState, Event, UiPush, UiPushType, ProximityReading
@@ -51,6 +53,9 @@ class MachineHotState:
     context_checked_at: float = 0.0
     last_envelope_conditions: list[str] = field(default_factory=list)
     alert_states: dict[str, AlertState] = field(default_factory=dict)
+    # Stage 4B: tracks the HUD/IDLE_HUB edge so the undelivered-lesson check
+    # runs once per transition into IDLE_HUB, not every frame spent idle.
+    last_ui_mode: str = "HUD"
 
     # Batching. event_buffer holds (frame_seq, event) so each event is
     # persisted with the frame_seq it actually fired on, not the state's
@@ -102,6 +107,43 @@ def parse_flat_redis_telemetry(raw: dict) -> TelemetryFrame:
         gps=(_val('gps_lat', default=0.0, typ=float), _val('gps_lon', default=0.0, typ=float)),
         sig=_val('sig')
     )
+
+
+async def _maybe_deliver_lesson(operator_id: str, machine_id: str, ts: datetime) -> UiPush | None:
+    """
+    Stage 4B: the operator's oldest undelivered lesson, marked delivered on
+    the spot so it's never pushed twice. A lesson-generation/delivery bug
+    must never affect hot-path correctness, so any failure here is caught
+    and logged, never raised — the operator simply doesn't get a lesson
+    this time, which is a training-quality miss, not a safety issue.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(LessonRow).where(
+                    LessonRow.operator_id == operator_id, LessonRow.delivered_at.is_(None),
+                ).order_by(LessonRow.generated_at.asc()).limit(1)
+            )
+            lesson = result.scalar_one_or_none()
+            if lesson is None:
+                return None
+            await session.execute(
+                LessonRow.__table__.update().where(LessonRow.id == lesson.id).values(delivered_at=ts)
+            )
+            await session.commit()
+        return UiPush(
+            type=UiPushType.lesson_ready,
+            machine_id=machine_id,
+            ts=ts,
+            payload={
+                "lesson_id": str(lesson.id), "incident_id": str(lesson.incident_id),
+                "title": lesson.title, "short_tip": lesson.short_tip, "explanation": lesson.explanation,
+                "knowledge_refs": lesson.knowledge_refs, "source": lesson.source, "status": lesson.status,
+            },
+        )
+    except Exception as e:
+        logger.error(f"hot: lesson delivery check failed for operator_id={operator_id}: {type(e).__name__}: {e}")
+        return None
 
 
 async def flush_buffers(
@@ -324,6 +366,18 @@ async def process_frame(
         hot_state.state == MachineState.IDLE and hot_state.idle_ticks >= IDLE_HUB_DWELL_TICKS
     ) else "HUD"
 
+    # Stage 4B: on the HUD -> IDLE_HUB edge only (not every frame spent
+    # idle), check for an undelivered lesson for this operator and push it.
+    # A completely separate, short-lived DB session — deliberately decoupled
+    # from this call's own `session`/flush-buffer commit timing, so a
+    # lesson-delivery bug can never affect hot-path event/state persistence,
+    # and the delivered_at write is never left stranded in an uncommitted
+    # transaction if this session's batch never calls flush_buffers.
+    lesson_push = None
+    if ui_mode == "IDLE_HUB" and hot_state.last_ui_mode != "IDLE_HUB" and frame.operator_id:
+        lesson_push = await _maybe_deliver_lesson(frame.operator_id, frame.machine_id, frame.ts)
+    hot_state.last_ui_mode = ui_mode
+
     # 3. Redis State Update
     state_dict = {
         "state": hot_state.state.value,
@@ -343,7 +397,9 @@ async def process_frame(
         ts=frame.ts,
         payload=state_dict
     ))
-    
+    if lesson_push is not None:
+        pushes.append(lesson_push)
+
     for p in pushes:
         # Pydantic v2 dump
         msg = p.model_dump_json()

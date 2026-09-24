@@ -629,3 +629,114 @@ npm run lint    # oxlint — 0 errors, only pre-existing-pattern warnings (react
 - No automated frontend test runner exists in this project (confirmed before starting; the plan explicitly said not to add one without approval) — verification here is `tsc`/`oxlint` + the manual pass above, not automated tests.
 
 **Next:** Batch 3J (Full end-to-end verification), awaiting approval.
+
+---
+
+## Stage 3 / Batch 3J: Full end-to-end verification  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Goal:** prove the full chain Simulator → Hot → Warm → Event → Correlator → Incident → Cold → LLM/fallback → Frontend, including restarts and failure isolation, driven in-process rather than reasoned about component-by-component.
+
+**New files:**
+- `simulator/scenarios/demo_intel.yaml` — extends the original `demo.yaml` (RAIN/MUDDY + seatbelt + proximity) with a truck-absent SITE idle period, a truck-present OPERATOR idle period, and a held high-`fuel_lph` window for the anomaly detector.
+- `tests/e2e/conftest.py` + `tests/e2e/test_pipeline.py` — one real Postgres+Redis test driving signed telemetry through `/ingest/telemetry` (real HMAC + freshness + Lua sequence checks), then `WarmProcessor`/`Correlator.handle_event`/`ColdWorker.process` in-process (matching how the Batch 3D/3E/3H integration suites already exercise each individually) on the SAME telemetry the HTTP layer actually published — not synthetic events. Asserts: window persisted → hot SEATBELT_VIOLATION (CRITICAL) + PROXIMITY_BREACH (WARNING) → incident opened and extended → both in one timeline → cold worker explanation persisted (`groq_api_key` cleared, so the real deterministic-fallback code path, not a mock — the mocked/real-Groq-success paths already have dedicated coverage from Batch 3G/3H) → `GET /incidents/{id}` and `GET /machines/{id}/snapshot` both reflect it.
+- `tests/e2e/test_restart.py` — three tests, one per worker, each killing a live processor mid-scenario and continuing with a fresh instance (a real restart's shape: unacked/redelivered messages, no in-memory state carried over): warm (deterministic `window_id` + `ON CONFLICT DO NOTHING` → no duplicate window row), correlator (redelivering an already-linked event → `SKIP_DUPLICATE`, not a second incident), cold (`packet_hash` cache → `CACHED`, not a second explanation row).
+- `scripts/e2e_smoke.sh` — brings up the API + all 4 background workers + the `demo_intel` simulator scenario for a configurable duration, then prints `/admin/workers` and real row counts. A human-facing smoke check, not part of the pytest suite.
+
+**Files modified:**
+- `Makefile` — `demo-intel`, `test-unit`, `test-integration`, `test-e2e` targets.
+- **24 existing test files** (`tests/unit/*.py`, `backend/tests/unit/*.py`, `ml/tests/*.py`, `core/copilot_core/tests/test_engines.py`, `tests/test_batch4.py`, `tests/test_batch5.py`) — added the `pytestmark = pytest.mark.unit` (or `.integration`) that `pytest.ini` had defined markers for since Batch 3A but that almost nothing actually used, so `make test-unit`/`test-integration`/`test-e2e` were silently no-ops before this batch. Mechanical, but caught **two real bugs in the process**: a scripted insertion pass split two files' multi-line `from x import (...)` statements in half (`tests/unit/test_ids.py`, `tests/unit/test_simulator.py`, `backend/tests/unit/test_correlator.py`), which `py_compile`'d clean on everything *except* those three — fixed by hand before running anything.
+
+**Real bugs found and fixed while building the e2e test (not in the files above — pre-existing gaps the pipeline test exposed):**
+1. `Correlator.handle_event()` does **not** itself XADD to `incidents:work` — that's a separate `correlator.publish(event, incident_id, action)` call the real consumer loop (`_process_message` in `correlator.py`) makes afterward. The first draft of `test_pipeline.py` assumed `handle_event` alone was enough and its "the cold worker got queued" assertion failed empty — fixed by mirroring `_process_message`'s exact two-step pattern in the test, which is also a useful confirmation that this two-step contract is real and intentional, not an oversight.
+2. `incident_id` is deterministic (`contracts.ids.incident_id`, derived from `machine_id` + the triggering event's id) — a second test run within the same real Redis streams reproduced the exact same incident id as a prior run, so a naive `xrange()` over the whole (shared, cross-run) `telemetry`/`events`/`incidents:work` streams picked up stale entries from earlier manual/test sessions. Fixed by recording each stream's last entry id before the test acts and reading only newer entries — the streams are real infrastructure shared with manual demo runs, not a test-only fixture, so this is the correct fix rather than a workaround.
+3. `tests/e2e/test_restart.py` imported a helper via `from tests.e2e.conftest import aligned_window_start` inside a test body — this passed every time `pytest tests/e2e/` ran alone (its own invocation happens to make `tests.e2e` resolve), but broke with `ModuleNotFoundError: No module named 'tests.e2e'` the first time it was collected alongside `tests/unit/`, `tests/integration/`, `backend/tests/`, etc. in one combined run — `tests/` has no `__init__.py` (matching `tests/unit/`/`tests/integration/`'s existing convention), so cross-package imports between test modules aren't reliable regardless of invocation. Only surfaced at this batch's true full-suite checkpoint, never caught by the isolated `tests/e2e/` runs used while writing the test. Fixed by inlining the three-line helper instead of importing it — conftest.py fixtures (`redis_client`, `clean_machine`) are unaffected since pytest discovers those by directory, not import.
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest tests/e2e/ -v
+4 passed in ~8s (run twice back-to-back to confirm no cross-run flakiness — both green)
+
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+258 passed (final full-suite run, after the Stage 4A fixes below)
+```
+
+**Manual verification:**
+- `npm run build` / `npm run lint` — clean (frontend untouched by this batch beyond what 3I already covered).
+- Did **not** run `scripts/e2e_smoke.sh` for a full 3-minute wall-clock demo pass in this session (the automated `tests/e2e/` suite above already exercises the identical chain deterministically and faster) — the script is provided and manually runnable (`./scripts/e2e_smoke.sh 180`) for a human-facing demo/sanity check, e.g. before a live presentation.
+- Hot-path latency spot check against Batch 3.0's baseline was not re-measured numerically in this session; hot.py's per-frame logic is unchanged by this batch (3J added no hot-path code — Stage 4 did, see below).
+
+**Known limitations / deviations:**
+- `test_pipeline.py`'s cold-worker step uses the deterministic-fallback path (`groq_api_key` cleared), not a mocked-success Groq response — a deliberate scope choice, documented in the test's own module docstring, since the mocked/real-API paths already have dedicated coverage elsewhere and this batch's job is proving pipeline *wiring*, not re-proving grounding.
+- The marker pass (`pytest.mark.unit`/`.integration`) is now consistent across the suite, but `test-unit`/`test-integration` were never actually run as a gate in CI before this batch (there is no CI in this project) — this is a local convenience fix, not a new enforced gate.
+
+**Next:** Stage 3 complete. Stage 4 (lessons, effectiveness tracker, instructor booking, shift handover) is a new phase — see below; the user explicitly scoped it down to 4A–4C only (lesson generation, IDLE_HUB delivery, lesson player), declining the full spec and declining to fake unimplemented pieces.
+
+---
+
+## Frontend visual redesign  (2026-09-24)
+
+**Status:** ✅ verified
+
+**What:** a full visual/layout redesign of the React frontend — persistent role-aware `Sidebar` + `AppLayout` wrapper (new), refreshed `index.css` design tokens, and a from-scratch pass over `Login`, `PreStart`, `Hud`, `IdleHub`, `Supervisor`, `Admin`, `IncidentPage`, `MachineCard`, `ThreeDVis`, and the `intel`/`incidents` components — driven by a design brief the user requested (a Stitch/Antigravity prompt grounded in this codebase's actual data fields and routes) and executed by an external tool against an `implementation_plan.md` reviewed beforehand. State management, API contracts, routing guards, and WS logic were explicitly out of scope for that plan and stayed untouched. This entry only covers what I verified and fixed against the real running stack, not the design work itself.
+
+**Two real bugs found and fixed while verifying it:**
+1. **`Sidebar.tsx`'s `/supervisor/incidents` nav item was permanently stuck "active."** Traced to React Router v7's `NavLink`: passing a plain string `className` does **not** replace the router's own active-detection — it still auto-appends `"active"` based on `to`-prefix matching, and only the *function* form of `className` bypasses that entirely. Both supervisor nav items point at `/supervisor` (there's no standalone incidents route — incidents live inline on that page), so the string form was always "active" regardless of the custom condition written inside it. Fixed by using the function form and computing the highlight from `useLocation()` (which was also missing — the original code referenced a bare, non-reactive `location` global).
+2. **Any hard reload or direct URL open on a protected route bounced straight to `/login`, even with a valid session.** `AuthContext`'s `user` was derived from the stored JWT only inside a `useEffect`, so `token` was truthy but `user` was still `null` on the very first render — `ProtectedRoute` saw that and redirected before the effect ever ran. Fixed by deriving `user` synchronously in the `useState` initializer instead of only reactively.
+
+**Manual verification against the real stack:** logged in as all three roles; supervisor fleet grid + incident detail (ack/close) + sidebar highlighting across a hard reload; admin worker-status panel + a genuine `Chain Compromised` audit result (real tampered state from an earlier session, not a bug); operator pre-start → HUD. Zero console errors at any point. `npm run build` / `npm run lint` clean throughout (same pre-existing warning classes as before, nothing new).
+
+**Known limitation, not fixed:** the HUD's floating side cards (Machine Overview / Task ETA) overlap the 3D visualization below ~768px viewport width — within the plan's own stated support matrix (1280/1024/768px) but not exercised by the redesign's own verification pass. Left as-is; flagged to the user rather than silently patched, since it's cosmetic and not this session's scope.
+
+---
+
+## Stage 4 / Batch 4A-4C: Lesson generation + IDLE_HUB delivery + lesson player  (2026-09-24)
+
+**Status:** ✅ verified
+
+**Scope note:** the user's original request was the full Stage 4 spec (lesson generation, delivery, player, replay quiz, effectiveness tracking, Training Hub, instructor booking, shift handover). When time pressure came up, the request shifted to "make something that looks like it works, it doesn't have to be implemented all the way — it can't be checked." That was declined: this project's whole "Data Rule" discipline (never fabricate backend data, honest empty/unavailable states everywhere) is worth more than one fake-looking feature, and a fake feature is also just a bug waiting to be found by anyone who clicks it. The user was offered a real, scoped-down alternative instead and chose **4A–4C only, using Groq (not Gemini, matching the rest of this codebase)**. 4D–4H (quiz, effectiveness tracking, Training Hub, instructor booking, shift handover) are explicitly out of scope for this batch — see "Known limitations" below for exactly how that's represented in the UI (never as a fake working feature).
+
+**New tables:** `lessons` (migration `a504e0bd6bc3_stage4_lessons`) — one row per incident (deterministic id via `contracts.ids.lesson_id`, unique `incident_id` FK), `title`/`short_tip`/`explanation`/`knowledge_refs` (grounded), `source` (GROQ|FALLBACK), `status`, `fallback_reason`, `generated_at`/`delivered_at`/`read_at`.
+
+**New endpoints:** `GET /lessons` (operator's own, newest first), `GET /lessons/{id}` (RBAC: operator must own it, supervisor/admin unrestricted; first fetch stamps `read_at`).
+
+**New UiPush type used:** `lesson_ready` (already reserved in the `UiPushType` enum since an earlier batch, unused until now) — full lesson content pushed directly, no second round trip needed on delivery.
+
+### 4A — Lesson generation
+
+Mirrors the Batch 3G/3H incident-explanation pipeline almost exactly, reusing rather than duplicating: the SAME Incident Packet (`genai/packet.py`, same `allowed_event_ids`/`allowed_chunk_ids`), the SAME Groq client plumbing (`client.py`'s `_structured_completion` was factored out of `generate_explanation` so `generate_lesson_content` shares it rather than copy-pasting the retry/timeout/error handling), and the SAME retry-once-then-deterministic-fallback policy. New pieces: `genai/lesson_schemas.py` (`LessonLLM`: title/short_tip/explanation/knowledge_refs), `genai/lesson_prompts.py`, `genai/lesson_validator.py` (reuses `validator.py`'s smuggled-ref/forbidden-phrase checks directly — same rules, can't drift apart), `genai/lesson_fallback.py` (deterministic, category-keyed tip/explanation text, always grounded to a real chunk_id).
+
+Hooked into `ColdWorker.process()` right after the explanation is persisted (`_maybe_generate_lesson`): skipped when the incident has no assigned operator, skipped if a lesson already exists for that incident (deterministic id, checked before calling the LLM at all), and wrapped so any lesson-generation failure is logged and swallowed — **a lesson bug must never break incident explanation**, verified by a dedicated test that patches `_get_lesson` to raise and confirms the explanation still persists.
+
+### 4B — IDLE_HUB delivery
+
+Hooked into `hot.py`'s existing per-frame `ui_mode` computation: a new `MachineHotState.last_ui_mode` field detects the HUD→IDLE_HUB *edge* (not every frame spent idle), and only on that edge does `_maybe_deliver_lesson(operator_id, machine_id, ts)` run — the operator's oldest undelivered lesson (`delivered_at IS NULL`), stamped delivered and pushed in one step. Deliberately uses its **own** short-lived DB session rather than the frame-processing session already in scope, so a lesson-delivery bug can never affect hot-path event/state persistence, and the write isn't left stranded if the frame-processing session's batch never happens to call `flush_buffers`. Frontend does **not** compute IDLE_HUB itself (per the spec's own constraint) — it only reacts to `ui_mode` the backend already sends, unchanged from Batch 3I.
+
+### 4C — Lesson player
+
+`web/src/components/lessons/LessonPlayer.tsx`, wired into `IdleHub.tsx` in place of the old "Aspirational" placeholder card. Prefers the live `lesson_ready` WS push (full content, zero extra round trip); falls back to `GET /lessons?limit=1` + `GET /lessons/{id}` so a page reload during IDLE_HUB doesn't lose a lesson that already arrived server-side (`delivered_at` is the real source of truth, the WS push is just the fast path). Shows title, highlighted tip, explanation, real knowledge-citation chips, a source badge ("Grounded" vs "Deterministic"), and an honestly-**disabled** "Start Quiz · Coming soon" button — never a fake working quiz.
+
+**A real regression found and fixed at the full-suite checkpoint (not caught while iterating — this is exactly why the checkpoint step in the implementation discipline matters):** adding `lessons.incident_id` as a foreign key broke three existing integration test cleanup fixtures (`test_cold_worker.py`, `test_correlator_worker.py`, `tests/e2e/conftest.py`) that `DELETE FROM incidents` directly — any incident processed by the now-lesson-generating `ColdWorker.process()` during those tests left a `lessons` row behind, and Postgres correctly refused to delete the incident out from under it (`ForeignKeyViolationError`). 7 failed + 13 errored on the first full-suite run after 4A landed. Fixed by extending each fixture's cleanup to delete from `lessons` first too, matching this project's existing convention (no `ON DELETE CASCADE` anywhere in this schema — every table with a child row cleans up explicitly, same pattern `IncidentExplanationRow`/`IncidentTimeline`/`IncidentEvent` already used).
+
+**Tests executed (command + result):**
+```
+PYTHONPATH=. venv/bin/python -m pytest backend/tests/unit/test_lesson_fallback.py backend/tests/unit/test_lesson_validator.py -v
+14 passed
+
+PYTHONPATH=. venv/bin/python -m pytest tests/integration/test_lessons.py tests/integration/test_lesson_delivery.py tests/integration/test_lesson_api.py -v
+11 passed (generation+fallback+dedup+failure-isolation, delivery-exactly-once on the real IDLE_HUB transition, RBAC+read-marking via TestClient)
+
+PYTHONPATH=. venv/bin/python -m pytest tests/ core/copilot_core/tests/ ml/tests/ backend/tests/ -q
+258 passed — full suite, after the FK-cleanup fix above
+```
+
+**Manual verification (real stack, not just tests):** seeded a real lesson row for the real demo operator against the real running API + hot worker; logged in as `operator`, completed the real Pre-Start checklist for EXC001, confirmed the network log showed `GET /lessons?limit=1` → 200 → `GET /lessons/{id}` → 200 (the REST-fallback path, proven live); navigated to `/operator/idle` and visually confirmed the lesson player renders the real title ("Seatbelt Compliance"), the real highlighted tip, the real full explanation paragraph, the real `seatbelt-safety#overview` citation chip, the correct "Deterministic" source badge (this lesson used the `NO_API_KEY` fallback path), and the disabled "Start Quiz · Coming soon" button. Zero console errors. Cleaned up the seeded rows afterward.
+
+**Known limitations / explicitly out of scope (labelled honestly in the UI, not faked):**
+- **4D (replay quiz):** the player's "Start Quiz" button is real, visible, and permanently disabled with a tooltip — there is no quiz backend at all.
+- **4E (effectiveness tracking), 4G (instructor booking), 4H (shift handover):** not started — no tables, no endpoints, no UI surface referencing them anywhere.
+- **4F (Training Hub):** no standalone page exists; `GET /lessons` (list) is implemented and RBAC-correct, so a Training Hub could be built on top of it later without backend changes, but nothing renders it yet.
+- Lesson generation is unconditional for every incident with an operator_id — there's no per-operator rate limiting or "don't re-teach the same lesson twice in a week" logic; every distinct incident gets its own lesson.
+
+**Next:** awaiting direction — 4D onward, or a different priority. Not starting more Stage 4 scope without explicit approval, per the user's own instruction.

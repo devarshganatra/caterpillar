@@ -15,6 +15,7 @@ from backend.app.api.incidents import router as incidents_router
 from backend.app.api.machines import router as machines_router
 from backend.app.api.admin import router as admin_router
 from backend.app.api.knowledge import router as knowledge_router
+from backend.app.api.lessons import router as lessons_router
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ app.include_router(incidents_router, prefix="/incidents", tags=["incidents"])
 app.include_router(machines_router, prefix="/machines", tags=["machines"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
 app.include_router(knowledge_router, prefix="/knowledge", tags=["knowledge"])
+app.include_router(lessons_router, prefix="/lessons", tags=["lessons"])
 
 @app.get("/health")
 async def health_check():

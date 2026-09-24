@@ -1,66 +1,85 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMachine } from '../store/MachineContext';
-import { Coffee, GraduationCap } from 'lucide-react';
+import { Coffee, SignalZero } from 'lucide-react';
 import { EtaCard } from '../components/intel/EtaCard';
 import { IdleAttributionCard } from '../components/intel/IdleAttributionCard';
+import { LessonPlayer } from '../components/lessons/LessonPlayer';
+import { AppLayout } from '../components/layout/AppLayout';
+import { cn } from '../lib/utils';
 
 export function IdleHub() {
-  const { machineId, uiMode, status, eta, idleAttribution } = useMachine();
+  const { machineId, uiMode, status, eta, idleAttribution, lesson } = useMachine();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!machineId) {
-      navigate('/operator/prestart');
-    }
+    if (!machineId) navigate('/operator/prestart');
   }, [machineId, navigate]);
 
   useEffect(() => {
-    if (uiMode === 'HUD') {
-      navigate('/operator/hud');
-    }
+    if (uiMode === 'HUD') navigate('/operator/hud');
   }, [uiMode, navigate]);
 
   const isLive = status === 'CONNECTED';
 
   return (
-    <div className="min-h-screen bg-zinc-950 p-8 flex flex-col items-center justify-center relative">
+    <AppLayout>
+      <div className="min-h-full bg-[#080d1a] relative">
 
-      {/* Background decoration */}
-      <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
-        <Coffee className="w-96 h-96" />
-      </div>
+        {/* Subtle background glow */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse 80% 50% at 50% 20%, rgb(245 158 11 / 0.04) 0%, transparent 70%)' }}
+        />
 
-      <div className="z-10 text-center mb-12 intel-rise">
-        <h1 className="text-4xl font-bold text-primary">Idle Hub</h1>
-        <p className="text-muted-foreground mt-2 font-mono uppercase tracking-wider">
-          Machine {machineId} &middot; Waiting for next task
-        </p>
-      </div>
-
-      <div className="z-10 grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
-        <EtaCard eta={eta} />
-        <IdleAttributionCard machineId={machineId} latest={idleAttribution} />
-      </div>
-
-      <div className="z-10 w-full max-w-4xl mt-8">
-        <div className="glass-card p-6 flex flex-col">
-          <div className="flex items-center gap-3 mb-4 text-primary">
-            <GraduationCap className="w-5 h-5" />
-            <h2 className="text-xl font-semibold">Micro-Lesson</h2>
+        <div className="relative z-10 p-8 max-w-5xl mx-auto">
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-xl bg-status-warning/10 border border-status-warning/20 flex items-center justify-center">
+              <Coffee className="w-5 h-5 text-status-warning" />
+            </div>
+            <div>
+              <div className="data-label mb-0.5">Machine Idle</div>
+              <h1 className="text-2xl font-black text-foreground tracking-tight">Idle Hub</h1>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="font-mono text-sm text-muted-foreground">{machineId ?? '—'}</span>
+              <span className="state-badge state-idle">
+                <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+                Idle
+              </span>
+            </div>
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center min-h-[120px] border-2 border-dashed border-border rounded-lg bg-background/30">
-            <p className="text-muted-foreground font-medium">No pending lessons.</p>
-          </div>
-        </div>
-      </div>
 
-      {!isLive && (
-        <div className="fixed bottom-4 right-4 glass-card px-4 py-2 text-status-critical border-status-critical flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-status-critical animate-pulse" />
-          Live connection lost
+          {/* Main cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <EtaCard eta={eta} />
+            <IdleAttributionCard machineId={machineId} latest={idleAttribution} />
+          </div>
+
+          {/* Micro-lesson card (Stage 4A-4C: real lesson content, generated
+              from a real incident and grounded like incident explanations —
+              quiz/effectiveness tracking are out of this batch's scope). */}
+          <LessonPlayer livePush={lesson} />
         </div>
-      )}
-    </div>
+
+        {/* Connection status toast (non-blocking) */}
+        {!isLive && (
+          <div className={cn(
+            'fixed bottom-5 right-5 glass-card px-4 py-2.5 flex items-center gap-2.5 text-sm border z-50',
+            status === 'STALE'
+              ? 'text-status-warning border-status-warning/30 bg-status-warning/5'
+              : 'text-status-critical border-status-critical/30 bg-status-critical/5'
+          )}>
+            <SignalZero className="w-4 h-4" />
+            <span>{status === 'STALE' ? 'Data may be stale' : 'Live connection lost'}</span>
+            <div className={cn(
+              'w-1.5 h-1.5 rounded-full animate-pulse',
+              status === 'STALE' ? 'bg-status-warning' : 'bg-status-critical'
+            )} />
+          </div>
+        )}
+      </div>
+    </AppLayout>
   );
 }

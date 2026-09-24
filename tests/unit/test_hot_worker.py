@@ -10,6 +10,8 @@ import pytest
 from backend.app.worker.hot import MachineHotState, process_frame, IDLE_HUB_DWELL_TICKS
 from contracts.events import MachineState
 
+pytestmark = pytest.mark.unit
+
 
 def make_raw_frame(seq: int, machine_id: str = "EXC001", ts: datetime | None = None, **overrides) -> dict:
     """Builds the flat byte-keyed dict shape process_frame expects (mirrors stream.flatten_telemetry)."""
@@ -108,8 +110,13 @@ async def test_events_keep_their_own_frame_seq(redis_mock, session_mock):
 
 
 @pytest.mark.asyncio
-async def test_ui_mode_idle_hub_after_dwell(redis_mock, session_mock):
+async def test_ui_mode_idle_hub_after_dwell(redis_mock, session_mock, monkeypatch):
     """G6: ui_mode flips to IDLE_HUB only after IDLE_HUB_DWELL_TICKS consecutive IDLE frames."""
+    # The IDLE_HUB transition also triggers a Stage 4B lesson-delivery
+    # check, which deliberately opens its OWN real DB session (see
+    # hot._maybe_deliver_lesson's docstring) — stub it here so this stays
+    # a real unit test (no infra) and keeps testing only the G6 behavior.
+    monkeypatch.setattr("backend.app.worker.hot._maybe_deliver_lesson", AsyncMock(return_value=None))
     hot_state = MachineHotState(machine_id="EXC001")
     ts = datetime.now(timezone.utc)
 

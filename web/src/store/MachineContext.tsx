@@ -20,6 +20,7 @@ interface MachineContextType {
   idleAttribution: any | null;
   anomaly: any | null;
   openIncidents: any[];
+  lesson: any | null;
 }
 
 const MachineContext = createContext<MachineContextType | undefined>(undefined);

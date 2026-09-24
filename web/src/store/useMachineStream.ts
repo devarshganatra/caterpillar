@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
 import type {
-  EtaEstimate, IdleAttribution, AnomalyResult, IncidentSummary, EnvelopeState, MachineSnapshot,
+  EtaEstimate, IdleAttribution, AnomalyResult, IncidentSummary, EnvelopeState, MachineSnapshot, LessonPush,
 } from "../lib/types";
 
 // Stage 3 Batch 3I: the single source of truth for "what does the live
@@ -52,6 +52,11 @@ export interface MachineStreamState {
   idleAttribution: IdleAttribution | null;
   anomaly: AnomalyResult | null;
   openIncidents: IncidentSummary[];
+  /** Stage 4B: the most recent lesson pushed on the HUD->IDLE_HUB
+   *  transition this session. Not part of the snapshot (delivery is a
+   *  one-time event, not steady machine state) — a reload falls back to
+   *  fetching GET /lessons from the lesson player itself. */
+  lesson: LessonPush | null;
 }
 
 const WS_BASE = "ws://localhost:8000";
@@ -70,6 +75,7 @@ const INITIAL_STATE: Omit<MachineStreamState, "status" | "snapshotLoaded"> = {
   idleAttribution: null,
   anomaly: null,
   openIncidents: [],
+  lesson: null,
 };
 
 export function useMachineStream(machineId: string | null): MachineStreamState {
@@ -110,6 +116,10 @@ export function useMachineStream(machineId: string | null): MachineStreamState {
       idleAttribution: snap.latest_window?.idle_attribution ?? null,
       anomaly: snap.latest_window?.anomaly ?? null,
       openIncidents: snap.open_incidents ?? [],
+      // Not part of the snapshot (delivery is a one-time event, not
+      // steady state) — a reconnect relies on LessonPlayer's own GET
+      // /lessons fallback to catch up, not this reset.
+      lesson: null,
     });
     setSnapshotLoaded(true);
   }, []);
@@ -162,6 +172,8 @@ export function useMachineStream(machineId: string | null): MachineStreamState {
             : [incident, ...prev.openIncidents];
           return { ...prev, openIncidents };
         }
+        case "lesson_ready":
+          return { ...prev, lesson: push.payload as LessonPush };
         default:
           return prev;
       }

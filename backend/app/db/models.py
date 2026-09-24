@@ -345,6 +345,36 @@ class IncidentExplanationRow(Base):
     )
 
 
+class LessonRow(Base):
+    """
+    Stage 4A — one lesson per incident (deterministic id, unique incident_id:
+    regenerating for the same incident is a no-op, matching the idempotency
+    pattern of every other cold-path table). Delivered once via the hot
+    worker's IDLE_HUB transition push (`delivered_at`), read/fetched at most
+    once meaningfully by the operator's lesson player (`read_at`).
+    """
+    __tablename__ = "lessons"
+
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=False, unique=True)
+    machine_id = Column(String(32), nullable=False)
+    operator_id = Column(String(64), nullable=True)
+    title = Column(String(80), nullable=False)
+    short_tip = Column(String(200), nullable=False)
+    explanation = Column(String(800), nullable=False)
+    knowledge_refs = Column(JSONB, nullable=False)
+    source = Column(String(16), nullable=False)  # GROQ | FALLBACK
+    status = Column(String(16), nullable=False)  # READY | FALLBACK | FAILED
+    fallback_reason = Column(String(32), nullable=True)
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_lessons_operator_delivered", "operator_id", "delivered_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
