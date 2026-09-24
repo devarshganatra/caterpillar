@@ -14,7 +14,7 @@ from sqlalchemy import delete, select
 from backend.app.config import settings
 from backend.app.db.session import AsyncSessionLocal
 from backend.app.db.models import (
-    IncidentRow, IncidentTimeline, IncidentExplanationRow, Event as DBEvent,
+    IncidentRow, IncidentTimeline, IncidentExplanationRow, LessonRow, Event as DBEvent,
 )
 from backend.app.worker.cold import ColdWorker
 from backend.app.genai.client import LLMUnavailable
@@ -79,6 +79,10 @@ async def _cleanup(incident_id: uuid.UUID):
             select(IncidentTimeline.representative_event_id).where(IncidentTimeline.incident_id == incident_id)
         )
         event_ids = [r for r in tl.scalars().all() if r is not None]
+        # Stage 4A: ColdWorker.process() now also generates a lesson (for
+        # any incident with an operator_id) as a side effect of persisting
+        # the explanation — that FK-references this incident too.
+        await session.execute(delete(LessonRow).where(LessonRow.incident_id == incident_id))
         await session.execute(delete(IncidentExplanationRow).where(IncidentExplanationRow.incident_id == incident_id))
         await session.execute(delete(IncidentTimeline).where(IncidentTimeline.incident_id == incident_id))
         await session.execute(delete(IncidentRow).where(IncidentRow.id == incident_id))

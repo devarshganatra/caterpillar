@@ -12,6 +12,8 @@ import pytest
 from backend.app.worker.warm import WarmProcessor, _window_start_epoch
 from backend.app.config import settings
 
+pytestmark = pytest.mark.unit
+
 
 def make_raw_frame(seq: int, machine_id: str, ts: datetime, **overrides) -> dict:
     base = {

@@ -3,6 +3,8 @@ import pytest
 
 from ml.features import compute_window_features, robust_z, eta_feature_row, eta_feature_columns, encode_eta_row
 
+pytestmark = pytest.mark.unit
+
 
 def _frames(n, cycle_indices=(), rpm=1900.0, temp_start=85.0, temp_end=85.0, hyd=250.0, fuel=15.0, idle=False):
     cycle_completed = np.zeros(n, dtype=bool)

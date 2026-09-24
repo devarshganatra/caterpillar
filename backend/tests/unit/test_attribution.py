@@ -7,6 +7,8 @@ import pytest
 from backend.app.services import attribution
 from backend.app.services.ml_registry import ModelRegistry
 
+pytestmark = pytest.mark.unit
+
 CFG = {
     "weather_stop_rain_mm_h": 20.0, "weather_stop_visibility_m": 50.0,
     "weather_stop_wind_kmh": 60.0, "idle_dev_ratio": 2.0,

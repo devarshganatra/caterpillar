@@ -8,6 +8,8 @@ from backend.app.services.correlator import (
     timeline_entry_key, merge_into_entry, new_entry_for_event, summarize_event,
 )
 
+pytestmark = pytest.mark.unit
+
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 

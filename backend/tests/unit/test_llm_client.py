@@ -10,6 +10,8 @@ import pytest
 from backend.app.genai import client as llm_client
 from backend.app.genai.client import LLMUnavailable, generate_explanation
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def _reset_client_singleton():

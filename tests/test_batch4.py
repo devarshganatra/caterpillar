@@ -11,6 +11,8 @@ from backend.app.services.audit_chain import append_audit_log, verify_chain
 from backend.app.db.models import AuditLog
 from sqlalchemy import text
 
+pytestmark = pytest.mark.integration
+
 client = TestClient(app)
 
 def test_auth_failures():

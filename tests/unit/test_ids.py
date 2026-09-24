@@ -1,7 +1,10 @@
 """Unit tests for contracts/ids.py — determinism is the whole point."""
+import pytest
 from contracts.ids import (
     hot_event_id, warm_event_id, eta_slip_event_id, incident_id, window_id,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_hot_event_id_deterministic():

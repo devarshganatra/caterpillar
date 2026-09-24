@@ -4,6 +4,8 @@ import pytest
 from backend.app.genai.fallback import build_fallback
 from backend.app.genai.validator import validate_grounding
 
+pytestmark = pytest.mark.unit
+
 EVENT_ID_1 = "11111111-1111-1111-1111-111111111111"
 EVENT_ID_2 = "22222222-2222-2222-2222-222222222222"
 TRIGGER_ID = EVENT_ID_1

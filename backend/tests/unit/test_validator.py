@@ -1,6 +1,9 @@
 """Unit tests for backend.app.genai.validator."""
 from backend.app.genai.schemas import IncidentExplanationLLM
 from backend.app.genai.validator import validate_grounding, parse_and_validate
+import pytest
+
+pytestmark = pytest.mark.unit
 
 PACKET = {
     "allowed_event_ids": ["evt-1", "evt-2"],

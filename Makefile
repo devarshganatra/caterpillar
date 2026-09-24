@@ -1,4 +1,4 @@
-.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train worker-warm worker-correlator worker-cold
+.PHONY: up down build logs shell test reset gen-data gen-data-dev gen-data-tiny test-ml train-eta train-anomaly baselines evaluate train worker-warm worker-correlator worker-cold demo-intel test-unit test-integration test-e2e
 
 up:
 	docker-compose up -d
@@ -60,3 +60,16 @@ worker-correlator:
 
 worker-cold:
 	PYTHONPATH=. venv/bin/python -m backend.app.worker.cold
+
+# Stage 3 / Batch 3J — full pipeline demo + verification.
+demo-intel:
+	PYTHONPATH=. venv/bin/python simulator/sim.py --scenario simulator/scenarios/demo_intel.yaml --machine EXC001
+
+test-unit:
+	PYTHONPATH=. venv/bin/python -m pytest -m unit -v
+
+test-integration:
+	PYTHONPATH=. venv/bin/python -m pytest -m integration -v
+
+test-e2e:
+	PYTHONPATH=. venv/bin/python -m pytest -m e2e -v

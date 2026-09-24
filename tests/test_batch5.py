@@ -5,6 +5,8 @@ from backend.app.main import app
 from jose import jwt
 from backend.app.config import settings
 
+pytestmark = pytest.mark.integration
+
 @pytest.mark.asyncio
 async def test_ws_ticket_generation_and_me_endpoint():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

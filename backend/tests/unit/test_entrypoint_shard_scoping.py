@@ -18,6 +18,8 @@ from backend.app.worker.hot import MachineHotState
 from contracts.shard import shard_for
 from contracts.machine_config import MACHINES
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_idle_flush_only_touches_machines_on_its_own_shard(monkeypatch):

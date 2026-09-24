@@ -1,10 +1,13 @@
 """Unit tests for simulator/sim.py fixes (G9): deterministic assignment + hauler queue model."""
 import random
 
+import pytest
 from simulator.sim import (
     create_initial_state, advance_state, apply_scenario_overrides,
     build_telemetry_frame, SimMode, MachineRunState,
 )
+
+pytestmark = pytest.mark.unit
 from contracts.machine_config import MACHINES
 from contracts.demo_assignments import DEMO_ASSIGNMENTS
 

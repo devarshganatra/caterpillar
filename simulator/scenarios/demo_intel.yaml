@@ -1,0 +1,87 @@
+# Stage 3 Batch 3J demo scenario for EXC001: extends demo.yaml's
+# RAIN/MUDDY + seatbelt + proximity pattern with the intelligence-layer
+# cases the original demo.yaml never exercised — a truck-absent (SITE)
+# idle period, an operator idle period with a truck present (OPERATOR),
+# and an injected high-fuel-rate working period for the anomaly detector.
+#
+# Run with: PYTHONPATH=. venv/bin/python simulator/sim.py \
+#   --scenario simulator/scenarios/demo_intel.yaml --machine EXC001
+
+- at: 20s
+  context:
+    site_id: SITE-A
+    weather: RAIN
+    rainfall_mm_h: 12
+    visibility_m: 180
+    ambient_temp_c: 18
+    wind_kmh: 10
+    ground: MUDDY
+    daylight: true
+
+- at: 30s
+  machine_id: EXC001
+  set:
+    seatbelt: UNFASTENED
+
+- at: 40s
+  machine_id: EXC001
+  repeat:
+    every: 6s
+    times: 4
+    set:
+      proximity:
+        zone: ORANGE
+        distance_m: 5.5
+        source: camera_rear
+
+- at: 75s
+  machine_id: EXC001
+  set:
+    seatbelt: FASTENED
+
+# SITE idle: no hauler truck present for a full window+ — idle attribution
+# should classify this stretch as SITE (truck-absent), not OPERATOR.
+- at: 90s
+  machine_id: EXC001
+  set:
+    mode: idle
+    truck_present: false
+    hauler_queue_len: 0
+
+- at: 150s
+  machine_id: EXC001
+  set:
+    mode: working
+    truck_present: true
+    hauler_queue_len: 2
+
+# OPERATOR idle: idle with a truck present and ready — attribution should
+# land on OPERATOR rather than SITE for this stretch.
+- at: 180s
+  machine_id: EXC001
+  set:
+    mode: idle
+    truck_present: true
+    hauler_queue_len: 2
+
+- at: 240s
+  machine_id: EXC001
+  set:
+    mode: working
+    truck_present: true
+    hauler_queue_len: 1
+
+# Injected anomaly: an implausibly high fuel burn rate held through a full
+# working window, well outside the trained baseline's normal range.
+- at: 250s
+  machine_id: EXC001
+  repeat:
+    every: 1s
+    times: 40
+    set:
+      current_fuel_lph: 55.0
+
+- at: 300s
+  machine_id: EXC001
+  set:
+    current_fuel_lph: 14.0

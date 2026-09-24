@@ -6,6 +6,8 @@ import pytest
 
 from backend.app.knowledge.retriever import KnowledgeRetriever, load_chunks, slugify, query_for_incident
 
+pytestmark = pytest.mark.unit
+
 DOCS_DIR = "backend/app/knowledge/docs"
 
 

@@ -5,6 +5,8 @@ from backend.app.services import anomaly
 from backend.app.services.ml_registry import ModelRegistry
 from ml.constants import WINDOW_FEATURES
 
+pytestmark = pytest.mark.unit
+
 
 def _features(**overrides):
     base = {

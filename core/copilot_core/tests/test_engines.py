@@ -7,6 +7,9 @@ from core.copilot_core.safety import evaluate_safety
 from core.copilot_core.health import evaluate_health
 from core.copilot_core.risk import update_risk
 from core.copilot_core.arbitrator import arbitrate, AlertState
+import pytest
+
+pytestmark = pytest.mark.unit
 
 def _frame(rpm=1500, hyd=200, speed=0, seatbelt="FASTENED", cycle=False, prox=None, temp=90):
     return TelemetryFrame(

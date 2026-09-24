@@ -6,6 +6,8 @@ from backend.app.services import eta
 from backend.app.services.ml_registry import ModelRegistry
 from ml.features import eta_feature_columns, encode_eta_row, eta_feature_row
 
+pytestmark = pytest.mark.unit
+
 
 # --- predict_task / explain (using the real trained ml/artifacts) ---------
 

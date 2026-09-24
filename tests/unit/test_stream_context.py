@@ -7,6 +7,8 @@ import pytest
 from backend.app.services import stream
 from contracts.events import ContextFrame
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_publish_context_does_not_access_missing_sig_attr(monkeypatch):

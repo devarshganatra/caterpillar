@@ -6,6 +6,8 @@ from ml.train_anomaly import train as train_anomaly
 from ml.baselines import build_baselines
 from ml.evaluate import evaluate_eta, evaluate_anomaly, evaluate_attribution
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(scope="module")
 def pipeline(tmp_path_factory):

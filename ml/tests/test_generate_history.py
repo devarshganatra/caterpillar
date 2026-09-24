@@ -5,6 +5,8 @@ import pytest
 from ml.generate_history import generate
 from ml.constants import IDLE_CAUSES
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(scope="module")
 def tiny_run(tmp_path_factory):

@@ -4,6 +4,8 @@ import pytest
 from ml.generate_history import generate
 from ml.train_anomaly import train
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(scope="module")
 def trained(tmp_path_factory):

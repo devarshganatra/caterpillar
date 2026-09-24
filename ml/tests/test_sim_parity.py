@@ -20,6 +20,8 @@ from ml.features import compute_window_features, WINDOW_FEATURES
 from ml.sim_physics import simulate_window
 from simulator.sim import create_initial_state, advance_state, SimMode
 
+pytestmark = pytest.mark.unit
+
 
 def _run_real_simulator(machine_id: str, n_frames: int, seed: int, warmup_frames: int = 300) -> dict:
     """

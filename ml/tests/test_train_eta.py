@@ -6,6 +6,8 @@ import pytest
 from ml.generate_history import generate
 from ml.train_eta import train
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(scope="module")
 def trained(tmp_path_factory):
