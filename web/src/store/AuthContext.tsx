@@ -30,21 +30,30 @@ function parseJwt(token: string): any {
   }
 }
 
+/** Synchronous so the FIRST render already has `user` set from a stored
+ *  token — deriving it only in a useEffect meant ProtectedRoute saw
+ *  `token` truthy but `user` still null on that first render (before the
+ *  effect ran) and immediately redirected to /login, on every hard
+ *  page load / direct URL open, even with a perfectly valid session. */
+function deriveUser(token: string | null): User | null {
+  if (!token) return null;
+  const payload = parseJwt(token);
+  if (payload && payload.exp * 1000 > Date.now()) {
+    return { sub: payload.sub, role: payload.role as UserRole };
+  }
+  return null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('jwt_token'));
-  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('jwt_token'));
+  const [user, setUser] = useState<User | null>(() => deriveUser(localStorage.getItem('jwt_token')));
 
   useEffect(() => {
-    if (token) {
-      const payload = parseJwt(token);
-      if (payload && payload.exp * 1000 > Date.now()) {
-        setUser({ sub: payload.sub, role: payload.role as UserRole });
-      } else {
-        // Expired token
-        logout();
-      }
+    const derived = deriveUser(token);
+    if (token && !derived) {
+      logout();  // token present but expired/invalid
     } else {
-      setUser(null);
+      setUser(derived);
     }
   }, [token]);
 
